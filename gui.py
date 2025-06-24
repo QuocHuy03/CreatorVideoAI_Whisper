@@ -12,9 +12,6 @@ from pydub import AudioSegment
 import concurrent.futures
 
 MAX_THREADS = 2
-TEMP_VIDEO = "temp.mp4"
-SUB_FILE = "subtitles.srt"
-AUDIO_FILE = "voice.mp3"
 OUTPUT_FOLDER = "outputs"
 
 if not os.path.exists(OUTPUT_FOLDER):
@@ -28,7 +25,7 @@ def create_voice_with_elevenlabs(text, output_file, api_key, voice_id="EXAVITQu4
     }
     payload = {
         "text": text,
-        "model_id": "eleven_turbo_v2_5",
+        "model_id": "eleven_flash_v2_5",
         "voice_settings": {
             "stability": 0.5,
             "similarity_boost": 0.75
@@ -120,7 +117,7 @@ class VideoGeneratorApp(QWidget):
         self.layout.addWidget(self.select_folder_btn)
 
         self.text_input = QTextEdit()
-        self.text_input.setPlaceholderText("==|==\nText 1\n==|==\nText 2...")
+        self.text_input.setPlaceholderText("Mỗi dòng là một video")
         self.layout.addWidget(self.text_input)
 
         self.api_key_input = QTextEdit()
@@ -158,10 +155,23 @@ class VideoGeneratorApp(QWidget):
             QMessageBox.warning(self, "Thiếu API Key", "Vui lòng nhập API Key của ElevenLabs")
             return
 
-        self.text_list = [txt.strip() for txt in raw_text.split("==|==") if txt.strip()]
+        self.text_list = [
+            txt.strip()
+            for txt in raw_text.split("==|==")
+            if txt.strip()
+        ]
+
+        if not self.text_list:
+            QMessageBox.warning(self, "Không có nội dung", "Không tìm thấy nội dung hợp lệ sau khi phân tách!")
+            return
+
         total_jobs = len(self.text_list)
         self.progress.setMaximum(total_jobs)
         self.progress.setValue(0)
+
+        # Dọn sạch thư mục outputs trước (tùy chọn)
+        for f in os.listdir(OUTPUT_FOLDER):
+            os.remove(os.path.join(OUTPUT_FOLDER, f))
 
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_THREADS)
         futures = []
@@ -178,16 +188,25 @@ class VideoGeneratorApp(QWidget):
 
     def run_video_job(self, text, folder_path, output_path, api_key, index):
         try:
-            create_voice_with_elevenlabs(text, AUDIO_FILE, api_key)
-            create_srt_word_by_word(AUDIO_FILE, text, SUB_FILE)
-            duration = AudioSegment.from_file(AUDIO_FILE).duration_seconds
+            audio_file = f"temp_audio_{index}.mp3"
+            sub_file = f"temp_sub_{index}.srt"
+            temp_video = f"temp_video_{index}.mp4"
+
+            # Xóa file tạm cũ nếu có
+            for f in [audio_file, sub_file, temp_video]:
+                if os.path.exists(f):
+                    os.remove(f)
+
+            create_voice_with_elevenlabs(text, audio_file, api_key)
+            create_srt_word_by_word(audio_file, text, sub_file)
+            duration = AudioSegment.from_file(audio_file).duration_seconds
             media_files = [
                 os.path.join(folder_path, f)
                 for f in os.listdir(folder_path)
                 if f.lower().endswith((".jpg", ".png", ".mp4", ".mov"))
             ]
-            create_video_randomized_media(media_files, duration, change_every=5, word_count=len(split_text_to_words(text)), output_file=TEMP_VIDEO)
-            burn_sub_and_audio(TEMP_VIDEO, SUB_FILE, AUDIO_FILE, output_path)
+            create_video_randomized_media(media_files, duration, change_every=5, word_count=len(split_text_to_words(text)), output_file=temp_video)
+            burn_sub_and_audio(temp_video, sub_file, audio_file, output_path)
         except Exception as e:
             print(f"❌ Lỗi tại video {index+1}: {e}")
 
