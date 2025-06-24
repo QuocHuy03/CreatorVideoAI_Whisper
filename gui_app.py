@@ -24,7 +24,7 @@ if not os.path.exists(OUTPUT_FOLDER):
 class VideoGeneratorApp(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("🎬 AI Video Generator with ElevenLabs")
+        self.setWindowTitle("🎬 AI Video Generator - @huyit32")
         self.setGeometry(200, 200, 800, 600)
 
         self.folder_path = ""
@@ -68,6 +68,7 @@ class VideoGeneratorApp(QWidget):
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(["Nội dung", "Trạng thái", "Font chữ", "Tỉ lệ Video", "Xem Video"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table.horizontalHeader().setDefaultAlignment(Qt.AlignCenter)
         self.layout.addWidget(self.table)
 
         self.progress = QProgressBar()
@@ -86,11 +87,15 @@ class VideoGeneratorApp(QWidget):
 
     @pyqtSlot(int, str)
     def _update_status_gui(self, index, status):
-        self.table.setItem(index, 1, QTableWidgetItem(status))
+        item = QTableWidgetItem(status)
+        item.setTextAlignment(Qt.AlignCenter)  # ✅ Căn giữa text
+        self.table.setItem(index, 1, item)
+
         btn = self.table.cellWidget(index, 4)
         if status == "✅ Hoàn thành" and os.path.exists(os.path.join(OUTPUT_FOLDER, f"video_{index+1}.mp4")):
             if btn:
                 btn.setEnabled(True)
+
         self.progress.setValue(self.progress.value() + 1)
 
     def select_folder(self):
