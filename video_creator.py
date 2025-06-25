@@ -1,7 +1,10 @@
 import os
 import random
 import subprocess
+import hashlib
+import time
 from moviepy.editor import ImageClip, VideoFileClip, concatenate_videoclips
+from pydub import AudioSegment
 
 def is_valid_video(path):
     try:
@@ -83,18 +86,77 @@ def create_video_randomized_media(media_files, total_duration, change_every, wor
     else:
         raise Exception("❌ Không có clip hợp lệ nào để tạo video.")
 
-def burn_sub_and_audio(video, srt, audio, output, font_name="Playbill"):
-    command = [
-        "ffmpeg", "-y",
-        "-i", video,
-        "-i", audio,
-        "-filter_complex",
-        f"[0:v]subtitles={srt}:force_style='FontName={font_name},Alignment=2,MarginV=40'[v]",
-        "-map", "[v]",
-        "-map", "1:a",
-        "-c:v", "libx264",
-        "-c:a", "aac",
-        "-shortest",
-        output
-    ]
-    subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+def percent_to_db(percent):
+    """Chuyển % volume về decibel tương đối (dB giảm)."""
+    percent = max(1, min(percent, 100))  # tránh chia 0
+    return 40 * (1 - percent / 100)  # càng nhỏ càng giảm mạnh
+
+def burn_sub_and_audio(video, srt, audio, output, font_name="Playbill", bg_music_path=None, bg_music_volume=30):
+    print("🎬 Bắt đầu render với phụ đề và âm thanh...")
+
+    base_audio = AudioSegment.from_file(audio)
+    temp_combined_audio = None
+
+    if bg_music_path and os.path.exists(bg_music_path):
+        try:
+            bg_audio = AudioSegment.from_file(bg_music_path)
+
+            # Lặp để đủ dài
+            times = int(len(base_audio) / len(bg_audio)) + 1
+            bg_audio = (bg_audio * times)[:len(base_audio)]
+
+            # Giảm âm lượng theo %
+            volume_db = percent_to_db(bg_music_volume)
+            bg_audio = bg_audio - volume_db
+
+            # Ghép âm thanh
+            combined = base_audio.overlay(bg_audio)
+
+            # Tạo tên file tạm duy nhất
+            hash_id = hashlib.md5(output.encode()).hexdigest()[:8]
+            temp_combined_audio = f"combined_temp_audio_{hash_id}.mp3"
+            combined.export(temp_combined_audio, format="mp3")
+
+            # Đợi chắc chắn file đã tạo xong (max 2s)
+            for _ in range(20):
+                if os.path.exists(temp_combined_audio):
+                    break
+                time.sleep(0.1)
+            else:
+                raise FileNotFoundError(f"Không tìm thấy file {temp_combined_audio} sau khi export.")
+
+            audio = temp_combined_audio
+            print(f"🔊 Đã thêm nhạc nền từ: {bg_music_path} | Âm lượng: {bg_music_volume}% - ({volume_db:.2f} dB)")
+
+        except Exception as e:
+            print(f"❌ Lỗi khi xử lý nhạc nền: {e}")
+            return
+
+    try:
+        # Render video
+        command = [
+            "ffmpeg", "-y",
+            "-i", video,
+            "-i", audio,
+            "-filter_complex",
+            f"[0:v]subtitles={srt}:force_style='FontName={font_name},FontSize=15,PrimaryColour=&H00FFFF&,OutlineColour=&H000000&,Outline=1'[v]",
+            "-map", "[v]",
+            "-map", "1:a",
+            "-c:v", "libx264",
+            "-c:a", "aac",
+            "-shortest",
+            output
+        ]
+        subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print(f"✅ Xuất video hoàn tất: {output}")
+
+    except Exception as e:
+        print(f"❌ Lỗi khi render video: {e}")
+
+    # ✅ Sau khi render xong mới xoá
+    if temp_combined_audio and os.path.exists(temp_combined_audio):
+        try:
+            os.remove(temp_combined_audio)
+            print(f"🧹 Đã xoá file tạm: {temp_combined_audio}")
+        except Exception as e:
+            print(f"⚠️ Không thể xoá file tạm {temp_combined_audio}: {e}")
