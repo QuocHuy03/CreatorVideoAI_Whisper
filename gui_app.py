@@ -6,7 +6,7 @@ import concurrent.futures
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QPushButton, QFileDialog, QLabel,
     QTextEdit, QProgressBar, QMessageBox, QTableWidget, QTableWidgetItem,
-    QHBoxLayout, QComboBox, QHeaderView, QGroupBox, QSizePolicy, QLineEdit
+    QHBoxLayout, QComboBox, QHeaderView, QGroupBox, QSizePolicy, QLineEdit, QPlainTextEdit
 )
 from PyQt5.QtCore import Qt, QMetaObject, Q_ARG, pyqtSlot
 from PyQt5.QtGui import QFont
@@ -183,6 +183,12 @@ class VideoGeneratorApp(QWidget):
         self.table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         main_layout.addWidget(self.table)
 
+        self.log_output = QPlainTextEdit()
+        self.log_output.setReadOnly(True)
+        self.log_output.setMinimumHeight(150)
+        self.log_output.setPlaceholderText("📋 Log chi tiết sẽ hiển thị tại đây...")
+        main_layout.addWidget(self.log_output)
+
         # --- Progress bar ---
         self.progress = QProgressBar()
         self.progress.setTextVisible(True)
@@ -205,6 +211,13 @@ class VideoGeneratorApp(QWidget):
         super().__init__()
         self.setup_ui()
 
+
+    @pyqtSlot(str)
+    def append_log(self, message):
+        self.log_output.appendPlainText(message)
+
+    def safe_append_log(self, message: str):
+        QMetaObject.invokeMethod(self, "append_log", Qt.QueuedConnection, Q_ARG(str, message))
 
 
     def safe_update_status(self, index, status):
@@ -261,6 +274,8 @@ class VideoGeneratorApp(QWidget):
             QMessageBox.warning(self, "Không có nội dung", "Vui lòng nhập ít nhất một đoạn text.")
             return
 
+        # Clear log cũ trước khi chạy batch mới
+        self.log_output.clear()
         self.generate_btn.setEnabled(False)
         self.generate_btn.setText("🔄 Đang xử lý...")
 
@@ -331,42 +346,55 @@ class VideoGeneratorApp(QWidget):
         self.table.setCellWidget(row, 5, btn)
 
 
+
     def open_video(self, index):
         path = os.path.join(OUTPUT_FOLDER, f"video_{index}.mp4")
         if os.path.exists(path):
             os.startfile(path)
 
 
+
     def run_video_job(self, text, folder_path, output_path, api_key, index):
+        def log(msg):
+            self.safe_append_log(f"[Video #{index + 1}] {msg}")
+
+        log("🔄 Bắt đầu xử lý")
+
         audio_file = f"temp_audio_{index}.mp3"
         sub_file = f"temp_sub_{index}.srt"
         temp_video = f"temp_video_{index}.mp4"
 
         voice_id = self.voice_id_input.text().strip()
         if not voice_id:
-            voice_id = "EXAVITQu4vr4xnSDxMaL"  # default voice id nếu không nhập
+            voice_id = "EXAVITQu4vr4xnSDxMaL"
 
         try:
-            # Xóa các file tạm cũ nếu có
+            log(f"🎤 Đang tạo giọng với Voice ID: {voice_id}")
+
             for f in [audio_file, sub_file, temp_video]:
                 if os.path.exists(f):
                     os.remove(f)
+                    log(f"🧹 Xóa file tạm: {f}")
 
-            # Tạo hoặc thay thế giọng mới (tự xử xóa giọng cũ nếu cần)
             create_or_replace_voice(text, audio_file, api_key, voice_id=voice_id)
+            log("📝 Tạo giọng và lưu file audio thành công")
 
-            # Tạo phụ đề word-by-word
             create_srt_word_by_word(audio_file, text, sub_file)
+            log("📝 Tạo phụ đề hoàn tất")
+
             duration = AudioSegment.from_file(audio_file).duration_seconds
+            log(f"⏳ Độ dài audio: {duration:.2f} giây")
 
             media_files = [
                 os.path.join(folder_path, f)
                 for f in os.listdir(folder_path)
                 if f.lower().endswith((".jpg", ".png", ".mp4", ".mov"))
             ]
+            log(f"📂 Tìm thấy {len(media_files)} file media trong thư mục")
 
             aspect_ratio = self.ratio_selector.currentText()
             is_vertical = aspect_ratio == "Dọc (9:16)"
+            log(f"📐 Tỉ lệ video: {aspect_ratio}")
 
             create_video_randomized_media(
                 media_files=media_files,
@@ -376,6 +404,7 @@ class VideoGeneratorApp(QWidget):
                 output_file=temp_video,
                 is_vertical=is_vertical
             )
+            log("🎞️ Tạo video nền hoàn tất")
 
             font_name = self.font_selector.currentText()
 
@@ -383,12 +412,16 @@ class VideoGeneratorApp(QWidget):
             music_path = os.path.join("background_music", background_music)
             if not os.path.exists(music_path) or background_music == "Không có nhạc nền":
                 music_path = None
+                log("🎵 Không sử dụng nhạc nền")
+            else:
+                log(f"🎵 Nhạc nền: {background_music}")
 
             volume_str = self.volume_selector.currentText().replace("%", "").strip()
             try:
                 music_volume = int(volume_str)
             except ValueError:
-                music_volume = 30  # fallback nếu lỗi
+                music_volume = 30
+            log(f"🔊 Âm lượng nhạc nền: {music_volume}%")
 
             burn_sub_and_audio(
                 temp_video,
@@ -399,18 +432,19 @@ class VideoGeneratorApp(QWidget):
                 bg_music_path=music_path,
                 bg_music_volume=music_volume
             )
+            log("🎬 Video cuối cùng đã được render và lưu")
 
             self.safe_update_status(index, "✅ Hoàn thành")
 
         except Exception as e:
-            print(f"❌ Lỗi tại video {index + 1}: {e}")
+            log(f"❌ Lỗi: {e}")
             self.safe_update_status(index, "❌ Lỗi")
             return
 
-        # Dọn sạch file tạm
         for f in [audio_file, sub_file, temp_video]:
             try:
                 if os.path.exists(f):
                     os.remove(f)
+                    log(f"🧹 Đã xóa file tạm: {f}")
             except Exception as cleanup_err:
-                print(f"⚠️ Không thể xoá file tạm {f}: {cleanup_err}")
+                log(f"⚠️ Không thể xóa file tạm {f}: {cleanup_err}")

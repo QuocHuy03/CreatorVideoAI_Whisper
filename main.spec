@@ -4,10 +4,13 @@ block_cipher = None
 
 a = Analysis(
     ['main.py'],
-    pathex=[],
+    pathex=['.'],  # Thư mục hiện tại
     binaries=[],
-    datas=[],
-    hiddenimports=[],
+    datas=[
+        ('background_music/*', 'background_music'),  # Copy folder nhạc nền
+        #('outputs/*', 'outputs'),  # Nếu muốn đóng gói outputs (thường để ngoài)
+    ],
+    hiddenimports=['pydub', 'requests', 'moviepy', 'PyQt5'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -15,12 +18,13 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
+    [],
     a.datas,
     [],
     name='VideoAI',
@@ -30,7 +34,7 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False, 
+    console=False,  # Ẩn console window
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
