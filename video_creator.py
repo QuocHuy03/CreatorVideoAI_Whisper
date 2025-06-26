@@ -5,6 +5,7 @@ import hashlib
 import time
 from moviepy.editor import ImageClip, VideoFileClip, concatenate_videoclips
 from pydub import AudioSegment
+from moviepy.video.fx.all import fadein, fadeout
 
 def is_valid_video(path):
     try:
@@ -13,6 +14,7 @@ def is_valid_video(path):
         return True
     except Exception:
         return False
+
 
 def resize_and_crop_center(clip, target_width, target_height):
     # Resize theo chiều phù hợp
@@ -35,7 +37,38 @@ def resize_and_crop_center(clip, target_width, target_height):
     print(f"✂️ Crop giữa: giữ lại vùng {target_width}x{target_height}")
     return cropped
 
-def create_video_randomized_media(media_files, total_duration, change_every, word_count, output_file, is_vertical=True):
+
+def apply_random_effect(clip, width, height):
+    effects = ["fade", "zoom", "slide_left", "slide_right", "slide_up", "slide_down", "none"]
+    effect = random.choice(effects)
+
+    duration = min(0.7, clip.duration / 2)
+
+    if effect == "fade":
+        return fadein(fadeout(clip, duration), duration), effect
+
+    elif effect == "zoom":
+        return clip.resize(lambda t: 1 + 0.03 * t), effect
+
+    elif effect.startswith("slide"):
+        start_pos = {
+            "slide_left": lambda: (-width, 0),
+            "slide_right": lambda: (width, 0),
+            "slide_up": lambda: (0, -height),
+            "slide_down": lambda: (0, height)
+        }.get(effect, lambda: (0, 0))()
+
+        animated_clip = clip.set_position(lambda t: (
+            int(start_pos[0] * (1 - t / duration)) if abs(start_pos[0]) > 0 else "center",
+            int(start_pos[1] * (1 - t / duration)) if abs(start_pos[1]) > 0 else "center"
+        ))
+        return animated_clip, effect
+
+    return clip, effect  # "none"
+
+
+def create_video_randomized_media(media_files, total_duration, change_every, word_count, output_file, is_vertical=True, transition_effect="fade"):
+
     clips = []
     num_segments = max(1, word_count // change_every)
     duration_per_segment = total_duration / num_segments
@@ -75,6 +108,9 @@ def create_video_randomized_media(media_files, total_duration, change_every, wor
         if valid_clip:
             print(f"✅ Segment {seg+1}/{num_segments} đã sẵn sàng.\n")
             clips.append(valid_clip)
+            valid_clip, effect = apply_random_effect(valid_clip, width, height)
+            print(f"✨ Segment {seg+1}: hiệu ứng {effect}")
+
         else:
             print(f"❌ Segment {seg+1} thất bại sau {retries} lần thử.\n")
 
@@ -86,12 +122,14 @@ def create_video_randomized_media(media_files, total_duration, change_every, wor
     else:
         raise Exception("❌ Không có clip hợp lệ nào để tạo video.")
 
+
 def percent_to_db(percent):
     """Chuyển % volume về decibel tương đối (dB giảm)."""
     percent = max(1, min(percent, 100))  # tránh chia 0
     return 40 * (1 - percent / 100)  # càng nhỏ càng giảm mạnh
 
-def burn_sub_and_audio(video, srt, audio, output, font_name="Playbill", bg_music_path=None, bg_music_volume=30):
+
+def burn_sub_and_audio(video, srt, audio, output, font_name="Playbill", font_size="15", font_color="00FFFF", show_subtitle=True, bg_music_path=None, bg_music_volume=30):
     print("🎬 Bắt đầu render với phụ đề và âm thanh...")
 
     base_audio = AudioSegment.from_file(audio)
@@ -101,62 +139,78 @@ def burn_sub_and_audio(video, srt, audio, output, font_name="Playbill", bg_music
         try:
             bg_audio = AudioSegment.from_file(bg_music_path)
 
-            # Lặp để đủ dài
+            # Lặp lại nhạc nền đủ dài
             times = int(len(base_audio) / len(bg_audio)) + 1
             bg_audio = (bg_audio * times)[:len(base_audio)]
 
-            # Giảm âm lượng theo %
             volume_db = percent_to_db(bg_music_volume)
             bg_audio = bg_audio - volume_db
 
-            # Ghép âm thanh
             combined = base_audio.overlay(bg_audio)
 
-            # Tạo tên file tạm duy nhất
+            # Tạo file audio tạm
             hash_id = hashlib.md5(output.encode()).hexdigest()[:8]
             temp_combined_audio = f"combined_temp_audio_{hash_id}.mp3"
             combined.export(temp_combined_audio, format="mp3")
 
-            # Đợi chắc chắn file đã tạo xong (max 2s)
             for _ in range(20):
                 if os.path.exists(temp_combined_audio):
                     break
                 time.sleep(0.1)
             else:
-                raise FileNotFoundError(f"Không tìm thấy file {temp_combined_audio} sau khi export.")
+                raise FileNotFoundError(f"Không tìm thấy file {temp_combined_audio}")
 
             audio = temp_combined_audio
-            print(f"🔊 Đã thêm nhạc nền từ: {bg_music_path} | Âm lượng: {bg_music_volume}% - ({volume_db:.2f} dB)")
+            print(f"🔊 Nhạc nền: {bg_music_path} | Âm lượng: {bg_music_volume}% ({volume_db:.2f} dB)")
 
         except Exception as e:
-            print(f"❌ Lỗi khi xử lý nhạc nền: {e}")
+            print(f"❌ Lỗi xử lý nhạc nền: {e}")
             return
 
     try:
-        # Render video
+        # Cấu hình filter phụ đề nếu không ẩn
+        filter_complex = None
+        if show_subtitle:
+            filter_complex = (
+                f"[0:v]subtitles={srt}:force_style='FontName={font_name},FontSize={font_size},PrimaryColour=&H00{font_color}&,"
+                f"OutlineColour=&H000000&,Outline=1'[v]"
+            )
+            print(f"🎨 Hiển thị phụ đề: font={font_name}, size={font_size}, màu=#{font_color}")
+        else:
+            print("🚫 Không hiển thị phụ đề")
+
         command = [
             "ffmpeg", "-y",
             "-i", video,
             "-i", audio,
-            "-filter_complex",
-            f"[0:v]subtitles={srt}:force_style='FontName={font_name},FontSize=15,PrimaryColour=&H00FFFF&,OutlineColour=&H000000&,Outline=1'[v]",
-            "-map", "[v]",
+        ]
+
+        if show_subtitle:
+            command += [
+                "-filter_complex", filter_complex,
+                "-map", "[v]",
+            ]
+        else:
+            command += ["-map", "0:v"]
+
+        command += [
             "-map", "1:a",
             "-c:v", "libx264",
             "-c:a", "aac",
             "-shortest",
             output
         ]
+
+
         subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         print(f"✅ Xuất video hoàn tất: {output}")
 
     except Exception as e:
-        print(f"❌ Lỗi khi render video: {e}")
+        print(f"❌ Lỗi render video: {e}")
 
-    # ✅ Sau khi render xong mới xoá
     if temp_combined_audio and os.path.exists(temp_combined_audio):
         try:
             os.remove(temp_combined_audio)
-            print(f"🧹 Đã xoá file tạm: {temp_combined_audio}")
+            print(f"🧹 Xoá file tạm: {temp_combined_audio}")
         except Exception as e:
-            print(f"⚠️ Không thể xoá file tạm {temp_combined_audio}: {e}")
+            print(f"⚠️ Không thể xoá file tạm: {e}")

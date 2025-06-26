@@ -20,6 +20,7 @@ from voice_generator import (
 )
 
 from subtitle_generator import create_srt_word_by_word
+from subtitle_from_elevenlabs import generate_srt_from_audio
 from video_creator import create_video_randomized_media, burn_sub_and_audio
 
 MAX_THREADS = 2
@@ -30,8 +31,55 @@ if not os.path.exists(OUTPUT_FOLDER):
 
 class VideoGeneratorApp(QWidget):
 
+
+    def save_preset(self):
+        preset = {
+            "api_key": self.api_key_input.text(),
+            "voice_id": self.voice_id_input.text(),
+            "ratio": self.ratio_selector.currentText(),
+            "font": self.font_selector.currentText(),
+            "font_size": self.subtitle_font_size_selector.currentText(),
+            "font_color": self.subtitle_color_selector.currentData(),
+            "music": self.music_selector.currentText(),
+            "volume": self.volume_selector.currentText(),
+            "subtitle_mode": self.subtitle_mode_selector.currentText(),
+            "language_code": self.language_code_selector.currentText(),
+            "subtitle_display": self.subtitle_display_selector.currentText()
+        }
+        try:
+            with open("preset_config.json", "w", encoding="utf-8") as f:
+                import json
+                json.dump(preset, f, ensure_ascii=False, indent=2)
+            self.safe_append_log("💾 Đã lưu preset thành công!")
+        except Exception as e:
+            self.safe_append_log(f"❌ Lỗi khi lưu preset: {e}")
+
+
+    def load_preset(self):
+        try:
+            import json
+            with open("preset_config.json", "r", encoding="utf-8") as f:
+                preset = json.load(f)
+            self.api_key_input.setText(preset.get("api_key", ""))
+            self.voice_id_input.setText(preset.get("voice_id", ""))
+            self.ratio_selector.setCurrentText(preset.get("ratio", "Dọc (9:16)"))
+            self.font_selector.setCurrentText(preset.get("font", "Playbill"))
+            self.subtitle_font_size_selector.setCurrentText(preset.get("font_size", "15"))
+            self.subtitle_color_selector.setCurrentIndex(
+                self.subtitle_color_selector.findData(preset.get("font_color", "00FFFF"))
+            )
+            self.music_selector.setCurrentText(preset.get("music", "Không có nhạc nền"))
+            self.volume_selector.setCurrentText(preset.get("volume", "30%"))
+            self.subtitle_mode_selector.setCurrentText(preset.get("subtitle_mode", "Từ văn bản nhập"))
+            self.language_code_selector.setCurrentText(preset.get("language_code", "vie"))
+            self.subtitle_display_selector.setCurrentText(preset.get("subtitle_display", "Hiển thị phụ đề"))
+            self.safe_append_log("📂 Đã tải preset thành công!")
+        except Exception as e:
+            self.safe_append_log(f"❌ Lỗi khi tải preset: {e}")
+
+
     def setup_ui(self):
-        self.setWindowTitle("🎬 AI Video Generator - @huyit32")
+        self.setWindowTitle("🎬 AI Video Generator v1.1 - @huyit32")
         self.setGeometry(200, 200, 800, 900)
 
         self.folder_path = ""
@@ -46,6 +94,28 @@ class VideoGeneratorApp(QWidget):
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(20, 20, 20, 20)
         main_layout.setSpacing(20)
+
+
+
+        # --- Preset Buttons ---
+        preset_buttons_layout = QHBoxLayout()
+        preset_buttons_layout.setSpacing(15)
+
+        self.save_preset_btn = QPushButton("💾 Lưu cấu hình")
+        self.save_preset_btn.setToolTip("Lưu lại toàn bộ cấu hình hiện tại thành preset")
+        self.save_preset_btn.clicked.connect(self.save_preset)
+        preset_buttons_layout.addWidget(self.save_preset_btn)
+
+        self.load_preset_btn = QPushButton("📂 Tải cấu hình")
+        self.load_preset_btn.setToolTip("Tải lại cấu hình đã lưu trước đó")
+        self.load_preset_btn.clicked.connect(self.load_preset)
+        preset_buttons_layout.addWidget(self.load_preset_btn)
+
+        main_layout.addLayout(preset_buttons_layout)
+
+
+
+
 
         # --- Top row: API config + Folder chooser ---
         top_h_layout = QHBoxLayout()
@@ -123,6 +193,90 @@ class VideoGeneratorApp(QWidget):
 
         settings_layout.addStretch()
         settings_group.setLayout(settings_layout)
+
+
+        # === Subtitle settings group ===
+        subtitle_group = QGroupBox("📜 Tùy chọn phụ đề")
+        subtitle_group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        subtitle_layout = QHBoxLayout()
+
+        # Chế độ phụ đề
+        subtitle_layout.addWidget(QLabel("Chế độ tạo phụ đề:"))
+
+        self.subtitle_mode_selector = QComboBox()
+        self.subtitle_mode_selector.addItems(["Từ văn bản nhập (shorts)", "Tạo tự động bằng ElevenLabs (video)"])
+        self.subtitle_mode_selector.setToolTip("Chọn cách tạo phụ đề")
+        subtitle_layout.addWidget(self.subtitle_mode_selector)
+
+        # Label + Combo chọn ngôn ngữ
+        self.language_label = QLabel("Ngôn ngữ:")
+        self.language_code_selector = QComboBox()
+        self.language_code_selector.addItems(["vie", "en", "es", "fr", "de", "ja", "ko", "zh"])
+        self.language_code_selector.setToolTip("Chọn ngôn ngữ cho ElevenLabs STT")
+
+        # Ẩn mặc định cả label và combo
+        self.language_label.hide()
+        self.language_code_selector.hide()
+
+        subtitle_layout.addWidget(self.language_label)
+        subtitle_layout.addWidget(self.language_code_selector)
+
+        # Cỡ chữ phụ đề
+        font_size_label = QLabel("Cỡ chữ:")
+        self.subtitle_font_size_selector = QComboBox()
+        self.subtitle_font_size_selector.addItems([str(size) for size in range(10, 31)])
+        self.subtitle_font_size_selector.setCurrentText("15")
+        self.subtitle_font_size_selector.setToolTip("Chọn kích thước chữ phụ đề")
+        subtitle_layout.addWidget(font_size_label)
+        subtitle_layout.addWidget(self.subtitle_font_size_selector)
+
+        # Màu chữ phụ đề
+        font_color_label = QLabel("Màu chữ:")
+        self.subtitle_color_selector = QComboBox()
+        self.subtitle_color_selector.addItem("Trắng", "FFFFFF")
+        self.subtitle_color_selector.addItem("Đen", "000000")
+        self.subtitle_color_selector.addItem("Xanh Dương", "00FFFF")
+        self.subtitle_color_selector.addItem("Đỏ", "FF0000")
+        self.subtitle_color_selector.addItem("Vàng", "FFFF00")
+        self.subtitle_color_selector.addItem("Xanh Lá", "00FF00")
+        self.subtitle_color_selector.setCurrentText("Xanh Dương")
+        self.subtitle_color_selector.setToolTip("Chọn màu chữ phụ đề")
+        subtitle_layout.addWidget(font_color_label)
+        subtitle_layout.addWidget(self.subtitle_color_selector)
+
+
+        # Sự kiện khi thay đổi chế độ
+        def toggle_language_ui(index):
+            show_lang = index == 1  # chỉ hiển thị nếu chọn "Tạo tự động bằng ElevenLabs"
+            self.language_label.setVisible(show_lang)
+            self.language_code_selector.setVisible(show_lang)
+
+        self.subtitle_mode_selector.currentIndexChanged.connect(toggle_language_ui)
+
+        subtitle_group.setLayout(subtitle_layout)
+
+
+        # === Subtitle display option group ===
+        subtitle_display_group = QGroupBox("🎛️ Tuỳ chọn hiển thị phụ đề")
+        subtitle_display_group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        subtitle_display_layout = QHBoxLayout()
+
+        subtitle_display_layout.addWidget(QLabel("Phụ đề:"))
+
+        self.subtitle_display_selector = QComboBox()
+        self.subtitle_display_selector.addItems(["Hiển thị phụ đề", "Ẩn phụ đề"])
+        self.subtitle_display_selector.setToolTip("Chọn xem có muốn hiển thị phụ đề trong video hay không")
+        subtitle_display_layout.addWidget(self.subtitle_display_selector)
+        subtitle_display_layout.addStretch()
+
+        subtitle_display_group.setLayout(subtitle_display_layout)
+
+        # === Đưa 2 group vào cùng 1 hàng ngang ===
+        subtitle_row_layout = QHBoxLayout()
+        subtitle_row_layout.setSpacing(20)
+        subtitle_row_layout.addWidget(subtitle_group, 2)
+        subtitle_row_layout.addWidget(subtitle_display_group, 1)
+        main_layout.addLayout(subtitle_row_layout)
 
         # Music settings group
         music_group = QGroupBox("Nhạc nền âm lượng")
@@ -379,8 +533,16 @@ class VideoGeneratorApp(QWidget):
             create_or_replace_voice(text, audio_file, api_key, voice_id=voice_id)
             log("📝 Tạo giọng và lưu file audio thành công")
 
-            create_srt_word_by_word(audio_file, text, sub_file)
-            log("📝 Tạo phụ đề hoàn tất")
+            subtitle_mode = self.subtitle_mode_selector.currentText()
+            if subtitle_mode == "Tạo tự động bằng ElevenLabs (video)":
+                language_code = self.language_code_selector.currentText()
+                log(f"📝 Gửi audio đến ElevenLabs để tạo phụ đề tự động (ngôn ngữ: {language_code})")
+                generate_srt_from_audio(audio_file, sub_file, api_key, language_code=language_code)
+                log("✅ Đã tạo phụ đề từ ElevenLabs thành công")
+            else:
+                log("📝 Tạo phụ đề Từ văn bản nhập (shorts)")
+                create_srt_word_by_word(text, sub_file)
+                log("✅ Đã tạo phụ đề từ văn bản")
 
             duration = AudioSegment.from_file(audio_file).duration_seconds
             log(f"⏳ Độ dài audio: {duration:.2f} giây")
@@ -407,6 +569,10 @@ class VideoGeneratorApp(QWidget):
             log("🎞️ Tạo video nền hoàn tất")
 
             font_name = self.font_selector.currentText()
+            font_size = self.subtitle_font_size_selector.currentText()
+            font_color_hex = self.subtitle_color_selector.currentData() or "00FFFF"  # fallback nếu không chọn
+            subtitle_visible = self.subtitle_display_selector.currentText() == "Hiển thị phụ đề"
+
 
             background_music = self.music_selector.currentText()
             music_path = os.path.join("background_music", background_music)
@@ -423,15 +589,25 @@ class VideoGeneratorApp(QWidget):
                 music_volume = 30
             log(f"🔊 Âm lượng nhạc nền: {music_volume}%")
 
+            # Kiểm tra có hiển thị phụ đề không
+            hide_subtitle = self.subtitle_display_selector.currentText() == "Ẩn phụ đề"
+            if hide_subtitle:
+                log("👁️‍🗨️ Đã chọn ẩn phụ đề trong video")
+
+            # Gọi hàm render
             burn_sub_and_audio(
-                temp_video,
-                sub_file,
-                audio_file,
-                output_path,
+                video=temp_video,
+                srt=sub_file,
+                audio=audio_file,
+                output=output_path,
                 font_name=font_name,
+                font_size=font_size,
+                font_color=font_color_hex,
+                show_subtitle=subtitle_visible,
                 bg_music_path=music_path,
                 bg_music_volume=music_volume
             )
+
             log("🎬 Video cuối cùng đã được render và lưu")
 
             self.safe_update_status(index, "✅ Hoàn thành")
@@ -447,4 +623,4 @@ class VideoGeneratorApp(QWidget):
                     os.remove(f)
                     log(f"🧹 Đã xóa file tạm: {f}")
             except Exception as cleanup_err:
-                log(f"⚠️ Không thể xóa file tạm {f}: {cleanup_err}")
+                log(f"⚠️ Không thể xoá file tạm {f}: {cleanup_err}")
