@@ -541,7 +541,7 @@ class VideoGeneratorApp(QWidget):
                 log("✅ Đã tạo phụ đề từ ElevenLabs thành công")
             else:
                 log("📝 Tạo phụ đề Từ văn bản nhập (shorts)")
-                create_srt_word_by_word(text, sub_file)
+                create_srt_word_by_word(audio_file, text, sub_file)
                 log("✅ Đã tạo phụ đề từ văn bản")
 
             duration = AudioSegment.from_file(audio_file).duration_seconds
