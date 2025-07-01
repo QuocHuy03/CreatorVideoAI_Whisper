@@ -93,7 +93,7 @@ def create_video_randomized_media(media_files, total_duration, change_every, wor
             try:
                 if ext in [".jpg", ".png"]:
                     print(f"🖼️ Đang xử lý ảnh: {file}")
-                    img = ImageClip(file, duration=duration_per_segment)
+                    img = ImageClip(file, duration=5)  # Chỉnh lại thời gian hiển thị ảnh 5 giây
                     valid_clip = resize_and_crop_center(img, width, height)
 
                 elif ext in [".mp4", ".mov"] and is_valid_video(file):
@@ -123,7 +123,6 @@ def create_video_randomized_media(media_files, total_duration, change_every, wor
         print(f"✅ Xuất video hoàn tất: {output_file}")
     else:
         raise Exception("❌ Không có clip hợp lệ nào để tạo video.")
-
 
 def percent_to_db(percent):
     """Chuyển % volume về decibel tương đối (dB giảm)."""
