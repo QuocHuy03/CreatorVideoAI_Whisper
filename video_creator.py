@@ -1,11 +1,13 @@
 import os
 import random
-import subprocess
 import hashlib
 import time
-from moviepy.editor import ImageClip, VideoFileClip, concatenate_videoclips
+from moviepy.editor import ImageClip, VideoFileClip, concatenate_videoclips, AudioFileClip
 from pydub import AudioSegment
+import ffmpeg
+from pathlib import Path
 from moviepy.video.fx.all import fadein, fadeout
+from PIL import Image
 
 def is_valid_video(path):
     try:
@@ -129,88 +131,89 @@ def percent_to_db(percent):
     return 40 * (1 - percent / 100)  # càng nhỏ càng giảm mạnh
 
 
-def burn_sub_and_audio(video, srt, audio, output, font_name="Playbill", font_size="15", font_color="00FFFF", show_subtitle=True, bg_music_path=None, bg_music_volume=30):
+def burn_sub_and_audio(video_path, srt_path, voice_path, output_path,
+                       font_name="Arial", font_size="14", font_color="#FFFFFF",
+                       bg_music_path=None, bg_music_volume=30):
     print("🎬 Bắt đầu render với phụ đề và âm thanh...")
 
-    base_audio = AudioSegment.from_file(audio)
+    voice_duration = AudioFileClip(voice_path).duration
     temp_combined_audio = None
 
+    # Xử lý âm thanh
+    base_audio = AudioSegment.from_file(voice_path)
+
     if bg_music_path and os.path.exists(bg_music_path):
-        try:
-            bg_audio = AudioSegment.from_file(bg_music_path)
+        bg_audio = AudioSegment.from_file(bg_music_path)
+        times = int(len(base_audio) / len(bg_audio)) + 1
+        bg_audio = (bg_audio * times)[:len(base_audio)]
+        volume_db = percent_to_db(bg_music_volume)
+        bg_audio = bg_audio - volume_db
+        combined = base_audio.overlay(bg_audio)
 
-            # Lặp lại nhạc nền đủ dài
-            times = int(len(base_audio) / len(bg_audio)) + 1
-            bg_audio = (bg_audio * times)[:len(base_audio)]
+        # Tạo file âm thanh tạm thời kết hợp giữa voice và nhạc nền
+        hash_id = hashlib.md5(output_path.encode()).hexdigest()[:8]
+        temp_combined_audio = f"combined_temp_audio_{hash_id}.mp3"
+        combined.export(temp_combined_audio, format="mp3")
 
-            volume_db = percent_to_db(bg_music_volume)
-            bg_audio = bg_audio - volume_db
+        for _ in range(20):
+            if os.path.exists(temp_combined_audio):
+                break
+            time.sleep(0.1)
 
-            combined = base_audio.overlay(bg_audio)
+        audio_path = temp_combined_audio
+        print(f"🔊 Nhạc nền đã thêm từ: {bg_music_path} - Âm lượng: {bg_music_volume}%")
+    else:
+        # Nếu không có nhạc nền, chỉ sử dụng voice
+        audio_path = voice_path
+        print("🎵 Không sử dụng nhạc nền, chỉ dùng âm thanh voice.")
 
-            # Tạo file audio tạm
-            hash_id = hashlib.md5(output.encode()).hexdigest()[:8]
-            temp_combined_audio = f"combined_temp_audio_{hash_id}.mp3"
-            combined.export(temp_combined_audio, format="mp3")
+    # Convert màu sang định dạng ASS
+    ff_color = f"&H{font_color[5:7]}{font_color[3:5]}{font_color[1:3]}&"
+    fonts_dir = "fonts"
 
-            for _ in range(20):
-                if os.path.exists(temp_combined_audio):
-                    break
-                time.sleep(0.1)
-            else:
-                raise FileNotFoundError(f"Không tìm thấy file {temp_combined_audio}")
+    # Subtitle filter
+    srt_safe = srt_path.replace("\\", "/")
+    subtitle_filter = ""
+    ass_path = srt_path.replace(".srt", ".ass").replace("\\", "/")
 
-            audio = temp_combined_audio
-            print(f"🔊 Nhạc nền: {bg_music_path} | Âm lượng: {bg_music_volume}% ({volume_db:.2f} dB)")
+    if os.path.exists(ass_path):
+        ass_safe = ass_path.replace(":", "\\\\:").replace("'", "\\'")
+        subtitle_filter = f"ass={ass_safe}"
+    else:
+        subtitle_filter = (
+            f"subtitles='{srt_safe}':fontsdir='{fonts_dir}':"
+            f"force_style='FontName={font_name},FontSize={font_size},PrimaryColour={ff_color},Alignment=2,MarginV=9'"
+        )
 
-        except Exception as e:
-            print(f"❌ Lỗi xử lý nhạc nền: {e}")
-            return
-
+    # Gọi ffmpeg
     try:
-        # Cấu hình filter phụ đề nếu không ẩn
-        filter_complex = None
-        if show_subtitle:
-            filter_complex = (
-                f"[0:v]subtitles={srt}:force_style='FontName={font_name},FontSize={font_size},PrimaryColour=&H00{font_color}&,"
-                f"OutlineColour=&H000000&,Outline=1'[v]"
+        input_video = ffmpeg.input(video_path, t=voice_duration)
+        input_audio = ffmpeg.input(audio_path)
+
+        # Sử dụng video và âm thanh đã được xử lý
+        (
+            ffmpeg
+            .output(
+                input_video,
+                input_audio,
+                output_path,
+                vf=subtitle_filter,
+                vcodec="libx264",
+                acodec="aac",
+                preset="ultrafast",
+                pix_fmt="yuv420p",
             )
-            print(f"🎨 Hiển thị phụ đề: font={font_name}, size={font_size}, màu=#{font_color}")
-        else:
-            print("🚫 Không hiển thị phụ đề")
+            .overwrite_output()
+            .run()
+        )
 
-        command = [
-            "ffmpeg", "-y",
-            "-i", video,
-            "-i", audio,
-        ]
+        print(f"✅ Xuất video hoàn tất: {output_path}")
 
-        if show_subtitle:
-            command += [
-                "-filter_complex", filter_complex,
-                "-map", "[v]",
-            ]
-        else:
-            command += ["-map", "0:v"]
+    except ffmpeg.Error as e:
+        print("❌ Lỗi khi render video với ffmpeg-python:")
+        print(e.stderr.decode() if e.stderr else str(e))
 
-        command += [
-            "-map", "1:a",
-            "-c:v", "libx264",
-            "-c:a", "aac",
-            "-shortest",
-            output
-        ]
-
-
-        subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        print(f"✅ Xuất video hoàn tất: {output}")
-
-    except Exception as e:
-        print(f"❌ Lỗi render video: {e}")
-
+    # Xóa file âm thanh tạm nếu có
     if temp_combined_audio and os.path.exists(temp_combined_audio):
-        try:
-            os.remove(temp_combined_audio)
-            print(f"🧹 Xoá file tạm: {temp_combined_audio}")
-        except Exception as e:
-            print(f"⚠️ Không thể xoá file tạm: {e}")
+        os.remove(temp_combined_audio)
+        print(f"🧹 Đã xoá file tạm: {temp_combined_audio}")

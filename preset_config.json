@@ -3,11 +3,8 @@
   "voice_id": "BUPPIXeDaJWBz696iXRS",
   "ratio": "Dọc (9:16)",
   "font": "Helvetica",
-  "font_size": "10",
+  "font_size": "12",
   "font_color": "000000",
   "music": "Cybernetic-Dreams-chosic.com_.mp3",
-  "volume": "40%",
-  "subtitle_mode": "Từ văn bản nhập (shorts)",
-  "language_code": "vie",
-  "subtitle_display": "Hiển thị phụ đề"
+  "volume": "40%"
 }

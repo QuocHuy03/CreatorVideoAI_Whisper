@@ -12,15 +12,8 @@ from PyQt5.QtCore import Qt, QMetaObject, Q_ARG, pyqtSlot
 from PyQt5.QtGui import QFont
 from pydub import AudioSegment
 
-from voice_generator import (
-    create_voice_with_elevenlabs,
-    create_or_replace_voice,
-    validate_api_key,
-    delete_voice
-)
+from voice_elevenlabs import transcribe_audio, create_or_replace_voice, generate_karaoke_ass_from_srt_and_words, validate_api_key
 
-from subtitle_generator import create_srt_word_by_word
-from subtitle_from_elevenlabs import generate_srt_from_audio
 from video_creator import create_video_randomized_media, burn_sub_and_audio
 
 MAX_THREADS = 2
@@ -31,7 +24,6 @@ if not os.path.exists(OUTPUT_FOLDER):
 
 class VideoGeneratorApp(QWidget):
 
-
     def save_preset(self):
         preset = {
             "api_key": self.api_key_input.text(),
@@ -41,10 +33,7 @@ class VideoGeneratorApp(QWidget):
             "font_size": self.subtitle_font_size_selector.currentText(),
             "font_color": self.subtitle_color_selector.currentData(),
             "music": self.music_selector.currentText(),
-            "volume": self.volume_selector.currentText(),
-            "subtitle_mode": self.subtitle_mode_selector.currentText(),
-            "language_code": self.language_code_selector.currentText(),
-            "subtitle_display": self.subtitle_display_selector.currentText()
+            "volume": self.volume_selector.currentText()
         }
         try:
             with open("preset_config.json", "w", encoding="utf-8") as f:
@@ -70,9 +59,6 @@ class VideoGeneratorApp(QWidget):
             )
             self.music_selector.setCurrentText(preset.get("music", "Không có nhạc nền"))
             self.volume_selector.setCurrentText(preset.get("volume", "30%"))
-            self.subtitle_mode_selector.setCurrentText(preset.get("subtitle_mode", "Từ văn bản nhập"))
-            self.language_code_selector.setCurrentText(preset.get("language_code", "vie"))
-            self.subtitle_display_selector.setCurrentText(preset.get("subtitle_display", "Hiển thị phụ đề"))
             self.safe_append_log("📂 Đã tải preset thành công!")
         except Exception as e:
             self.safe_append_log(f"❌ Lỗi khi tải preset: {e}")
@@ -80,7 +66,7 @@ class VideoGeneratorApp(QWidget):
 
     def setup_ui(self):
         self.setWindowTitle("🎬 AI Video Generator v1.1 - @huyit32")
-        self.setGeometry(200, 200, 800, 900)
+        self.setGeometry(200, 200, 1240, 850)
 
         self.folder_path = ""
         self.text_list = []
@@ -91,147 +77,78 @@ class VideoGeneratorApp(QWidget):
             "Candara", "Playbill", "Consolas", "Century Gothic", "Calibri"
         ]
 
-        main_layout = QVBoxLayout()
+        main_layout = QHBoxLayout()  # Sử dụng QHBoxLayout để chia layout thành 2 cột
         main_layout.setContentsMargins(20, 20, 20, 20)
         main_layout.setSpacing(20)
 
-
+        # Cột trái (Form chính)
+        left_column_layout = QVBoxLayout()
 
         # --- Preset Buttons ---
         preset_buttons_layout = QHBoxLayout()
         preset_buttons_layout.setSpacing(15)
 
         self.save_preset_btn = QPushButton("💾 Lưu cấu hình")
-        self.save_preset_btn.setToolTip("Lưu lại toàn bộ cấu hình hiện tại thành preset")
         self.save_preset_btn.clicked.connect(self.save_preset)
         preset_buttons_layout.addWidget(self.save_preset_btn)
 
         self.load_preset_btn = QPushButton("📂 Tải cấu hình")
-        self.load_preset_btn.setToolTip("Tải lại cấu hình đã lưu trước đó")
         self.load_preset_btn.clicked.connect(self.load_preset)
         preset_buttons_layout.addWidget(self.load_preset_btn)
 
-        main_layout.addLayout(preset_buttons_layout)
+        left_column_layout.addLayout(preset_buttons_layout)
 
-
-
-
-
-        # --- Top row: API config + Folder chooser ---
+        # --- API Key + Folder ---
         top_h_layout = QHBoxLayout()
         top_h_layout.setSpacing(30)
 
-        # API Config group
         api_group = QGroupBox("🔐 Cấu hình ElevenLabs API")
-        api_group.setStyleSheet("QGroupBox { font-weight: bold; }")
         api_layout = QHBoxLayout()
-
-        api_key_label = QLabel("API Key:")
-        api_key_label.setFont(QFont("Segoe UI", 10, QFont.Bold))
-        api_layout.addWidget(api_key_label)
-
+        api_layout.addWidget(QLabel("API Key:"))
         self.api_key_input = QLineEdit()
-        self.api_key_input.setPlaceholderText("Nhập API Key ElevenLabs")
-        self.api_key_input.setToolTip("Nhập API Key ElevenLabs của bạn tại đây")
         api_layout.addWidget(self.api_key_input)
 
-        voice_id_label = QLabel("Voice ID:")
-        voice_id_label.setFont(QFont("Segoe UI", 10, QFont.Bold))
-        api_layout.addWidget(voice_id_label)
-
+        api_layout.addWidget(QLabel("Voice ID:"))
         self.voice_id_input = QLineEdit()
-        self.voice_id_input.setPlaceholderText("Nhập Voice ID (mặc định nếu để trống)")
-        self.voice_id_input.setToolTip("Nhập Voice ID muốn dùng, ví dụ: Xb7hH8MSUJpSbSDYk0k2")
         api_layout.addWidget(self.voice_id_input)
-
         api_group.setLayout(api_layout)
 
-        # Folder chooser group
-        folder_group = QGroupBox("📁 Chọn thư mục chứa ảnh/video nền")
-        folder_group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        folder_group = QGroupBox("📁 Chọn thư mục media")
         folder_layout = QHBoxLayout()
-        folder_layout.setSpacing(10)
-
         self.select_folder_btn = QPushButton("Chọn thư mục")
-        self.select_folder_btn.setToolTip("Chọn thư mục chứa ảnh và video làm nền cho video đầu ra")
-        self.select_folder_btn.setFixedSize(140, 35)
         self.select_folder_btn.clicked.connect(self.select_folder)
         folder_layout.addWidget(self.select_folder_btn)
         folder_group.setLayout(folder_layout)
 
         top_h_layout.addWidget(api_group, 2)
         top_h_layout.addWidget(folder_group, 1)
+        left_column_layout.addLayout(top_h_layout)
 
-        main_layout.addLayout(top_h_layout)
-
-        # --- Second row: Video settings + Music settings ---
+        # --- Video & Music Settings ---
         second_h_layout = QHBoxLayout()
-        second_h_layout.setSpacing(40)
 
-        # Video settings group
-        settings_group = QGroupBox("Cài đặt video font")
-        settings_group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        settings_group = QGroupBox("🎞️ Video & Font Settings")
         settings_layout = QHBoxLayout()
-
-        ratio_label = QLabel("Tỉ lệ video:")
-        ratio_label.setFont(QFont("Segoe UI", 10, QFont.Bold))
-        settings_layout.addWidget(ratio_label)
-
+        settings_layout.addWidget(QLabel("Tỉ lệ video:"))
         self.ratio_selector = QComboBox()
         self.ratio_selector.addItems(["Dọc (9:16)", "Ngang (16:9)"])
-        self.ratio_selector.setToolTip("Chọn tỉ lệ khung hình video")
         settings_layout.addWidget(self.ratio_selector)
 
-        font_label = QLabel("Font chữ phụ đề:")
-        font_label.setFont(QFont("Segoe UI", 10, QFont.Bold))
-        settings_layout.addWidget(font_label)
-
+        settings_layout.addWidget(QLabel("Font chữ phụ đề:"))
         self.font_selector = QComboBox()
         self.font_selector.addItems(self.fonts)
-        self.font_selector.setToolTip("Chọn font chữ cho phụ đề video")
         settings_layout.addWidget(self.font_selector)
-
-        settings_layout.addStretch()
         settings_group.setLayout(settings_layout)
 
-
-        # === Subtitle settings group ===
-        subtitle_group = QGroupBox("📜 Tùy chọn phụ đề")
-        subtitle_group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        subtitle_group = QGroupBox("📜 Subtitle Options")
         subtitle_layout = QHBoxLayout()
-
-        # Chế độ phụ đề
-        subtitle_layout.addWidget(QLabel("Chế độ tạo phụ đề:"))
-
-        self.subtitle_mode_selector = QComboBox()
-        self.subtitle_mode_selector.addItems(["Từ văn bản nhập (shorts)", "Tạo tự động bằng ElevenLabs (video)"])
-        self.subtitle_mode_selector.setToolTip("Chọn cách tạo phụ đề")
-        subtitle_layout.addWidget(self.subtitle_mode_selector)
-
-        # Label + Combo chọn ngôn ngữ
-        self.language_label = QLabel("Ngôn ngữ:")
-        self.language_code_selector = QComboBox()
-        self.language_code_selector.addItems(["vie", "en", "es", "fr", "de", "ja", "ko", "zh"])
-        self.language_code_selector.setToolTip("Chọn ngôn ngữ cho ElevenLabs STT")
-
-        # Ẩn mặc định cả label và combo
-        self.language_label.hide()
-        self.language_code_selector.hide()
-
-        subtitle_layout.addWidget(self.language_label)
-        subtitle_layout.addWidget(self.language_code_selector)
-
-        # Cỡ chữ phụ đề
-        font_size_label = QLabel("Cỡ chữ:")
+        subtitle_layout.addWidget(QLabel("Cỡ chữ:"))
         self.subtitle_font_size_selector = QComboBox()
         self.subtitle_font_size_selector.addItems([str(size) for size in range(10, 31)])
         self.subtitle_font_size_selector.setCurrentText("15")
-        self.subtitle_font_size_selector.setToolTip("Chọn kích thước chữ phụ đề")
-        subtitle_layout.addWidget(font_size_label)
         subtitle_layout.addWidget(self.subtitle_font_size_selector)
 
-        # Màu chữ phụ đề
-        font_color_label = QLabel("Màu chữ:")
+        subtitle_layout.addWidget(QLabel("Màu chữ:"))
         self.subtitle_color_selector = QComboBox()
         self.subtitle_color_selector.addItem("Trắng", "FFFFFF")
         self.subtitle_color_selector.addItem("Đen", "000000")
@@ -240,125 +157,105 @@ class VideoGeneratorApp(QWidget):
         self.subtitle_color_selector.addItem("Vàng", "FFFF00")
         self.subtitle_color_selector.addItem("Xanh Lá", "00FF00")
         self.subtitle_color_selector.setCurrentText("Xanh Dương")
-        self.subtitle_color_selector.setToolTip("Chọn màu chữ phụ đề")
-        subtitle_layout.addWidget(font_color_label)
         subtitle_layout.addWidget(self.subtitle_color_selector)
-
-
-        # Sự kiện khi thay đổi chế độ
-        def toggle_language_ui(index):
-            show_lang = index == 1  # chỉ hiển thị nếu chọn "Tạo tự động bằng ElevenLabs"
-            self.language_label.setVisible(show_lang)
-            self.language_code_selector.setVisible(show_lang)
-
-        self.subtitle_mode_selector.currentIndexChanged.connect(toggle_language_ui)
-
         subtitle_group.setLayout(subtitle_layout)
 
+        second_h_layout.addWidget(settings_group, 2)
+        second_h_layout.addWidget(subtitle_group, 2)
+        left_column_layout.addLayout(second_h_layout)
 
-        # === Subtitle display option group ===
-        subtitle_display_group = QGroupBox("🎛️ Tuỳ chọn hiển thị phụ đề")
-        subtitle_display_group.setStyleSheet("QGroupBox { font-weight: bold; }")
-        subtitle_display_layout = QHBoxLayout()
-
-        subtitle_display_layout.addWidget(QLabel("Phụ đề:"))
-
-        self.subtitle_display_selector = QComboBox()
-        self.subtitle_display_selector.addItems(["Hiển thị phụ đề", "Ẩn phụ đề"])
-        self.subtitle_display_selector.setToolTip("Chọn xem có muốn hiển thị phụ đề trong video hay không")
-        subtitle_display_layout.addWidget(self.subtitle_display_selector)
-        subtitle_display_layout.addStretch()
-
-        subtitle_display_group.setLayout(subtitle_display_layout)
-
-        # === Đưa 2 group vào cùng 1 hàng ngang ===
-        subtitle_row_layout = QHBoxLayout()
-        subtitle_row_layout.setSpacing(20)
-        subtitle_row_layout.addWidget(subtitle_group, 2)
-        subtitle_row_layout.addWidget(subtitle_display_group, 1)
-        main_layout.addLayout(subtitle_row_layout)
-
-        # Music settings group
-        music_group = QGroupBox("Nhạc nền âm lượng")
-        music_group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        music_group = QGroupBox("🎵 Background Music")
         music_layout = QHBoxLayout()
-
-        music_label = QLabel("🎵 Nhạc nền:")
-        music_label.setFont(QFont("Segoe UI", 10, QFont.Bold))
-        music_layout.addWidget(music_label)
-
+        music_layout.addWidget(QLabel("Nhạc nền:"))
         self.music_selector = QComboBox()
         music_dir = "background_music"
         if not os.path.exists(music_dir):
             os.makedirs(music_dir)
-        music_files = [f for f in os.listdir(music_dir) if f.lower().endswith((".mp3", ".wav"))]
+        music_files = [f for f in os.listdir(music_dir) if f.endswith((".mp3", ".wav"))]
         if music_files:
+            self.music_selector.addItem("Không có nhạc nền")
             self.music_selector.addItems(music_files)
         else:
             self.music_selector.addItem("Không có nhạc nền")
-        self.music_selector.setToolTip("Chọn nhạc nền cho video")
+
         music_layout.addWidget(self.music_selector)
 
-        volume_label = QLabel("Âm lượng nhạc nền:")
-        volume_label.setFont(QFont("Segoe UI", 10, QFont.Bold))
-        music_layout.addWidget(volume_label)
-
+        music_layout.addWidget(QLabel("Âm lượng:"))
         self.volume_selector = QComboBox()
-        self.volume_selector.addItems(["10%", "20%", "30%", "40%", "50%", "60%", "70%", "80%", "90%", "100%"])
+        self.volume_selector.addItems([f"{i}%" for i in range(10, 110, 10)])
         self.volume_selector.setCurrentText("30%")
-        self.volume_selector.setToolTip("Chọn âm lượng nhạc nền")
         music_layout.addWidget(self.volume_selector)
-
-        music_layout.addStretch()
         music_group.setLayout(music_layout)
 
-        second_h_layout.addWidget(settings_group, 2)
-        second_h_layout.addWidget(music_group, 3)
+        left_column_layout.addWidget(music_group)
 
-        main_layout.addLayout(second_h_layout)
-
-        # --- Text input group ---
-        text_group = QGroupBox("Nội dung văn bản cho video")
-        text_group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        # --- Text input ---
+        text_group = QGroupBox("📝 Video Text Content")
         text_layout = QVBoxLayout()
         self.text_input = QTextEdit()
         self.text_input.setPlaceholderText("==|==\nVideo 1\n==|==\nVideo 2")
-        self.text_input.setMinimumHeight(180)
-        self.text_input.setFont(QFont("Consolas", 11))
         text_layout.addWidget(self.text_input)
         text_group.setLayout(text_layout)
-        main_layout.addWidget(text_group)
+        left_column_layout.addWidget(text_group)
 
-        # --- Table widget ---
+        # Add Left column layout to the main layout (first column)
+        main_layout.addLayout(left_column_layout, 4)  # Tăng tỷ lệ cho cột trái
+
+        # --- Right column layout ---
+        right_column_layout = QVBoxLayout()
+
+        # --- Log output GroupBox ---
+        log_group = QGroupBox("📋 Log Output")
+        log_group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        log_layout = QVBoxLayout()
+
+        # Log Output widget
+        self.log_output = QPlainTextEdit()
+        self.log_output.setReadOnly(True)
+        self.log_output.setPlaceholderText("📋 Log chi tiết sẽ hiển thị tại đây...")
+        log_layout.addWidget(self.log_output)
+
+        log_group.setLayout(log_layout)
+
+        # --- Table GroupBox ---
+        table_group = QGroupBox("📊 Table: Video Status")
+        table_group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        table_layout = QVBoxLayout()
+
+        # Table widget
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(["Nội dung", "Trạng thái", "Font chữ", "Âm thanh", "Tỉ lệ Video", "Xem Video"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.table.horizontalHeader().setDefaultAlignment(Qt.AlignCenter)
-        self.table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        main_layout.addWidget(self.table)
+        table_layout.addWidget(self.table)
 
-        self.log_output = QPlainTextEdit()
-        self.log_output.setReadOnly(True)
-        self.log_output.setMinimumHeight(150)
-        self.log_output.setPlaceholderText("📋 Log chi tiết sẽ hiển thị tại đây...")
-        main_layout.addWidget(self.log_output)
+        table_group.setLayout(table_layout)
 
-        # --- Progress bar ---
+        # Add Log GroupBox, Table GroupBox, and other components to right_column_layout
+        right_column_layout.addWidget(log_group)  # Add Log Output group
+        right_column_layout.addWidget(table_group)  # Add Table group
+
+        # --- Bottom section for progress and render button ---
+        bottom_section_layout = QVBoxLayout()
+
+        # --- Progress Bar ---
         self.progress = QProgressBar()
         self.progress.setTextVisible(True)
-        self.progress.setFormat("%p% - %v / %m")
-        self.progress.setMinimumHeight(23)
-        main_layout.addWidget(self.progress)
+        bottom_section_layout.addWidget(self.progress)
 
-        # --- Generate button ---
+        # --- Generate Button ---
         self.generate_btn = QPushButton("🚀 Render Video")
-        self.generate_btn.setEnabled(True)
-        self.generate_btn.setFont(QFont("Segoe UI", 13, QFont.Bold))
-        self.generate_btn.setFixedHeight(33)
         self.generate_btn.clicked.connect(self.start_batch_generation)
-        main_layout.addWidget(self.generate_btn)
+        bottom_section_layout.addWidget(self.generate_btn)
 
+        # Add bottom section layout to right column layout
+        right_column_layout.addLayout(bottom_section_layout)
+
+        # Add right_column_layout to main layout (second column)
+        main_layout.addLayout(right_column_layout, 3)  # Right column takes less space
+
+        # Set main layout
         self.setLayout(main_layout)
+
 
 
     def __init__(self):
@@ -369,6 +266,7 @@ class VideoGeneratorApp(QWidget):
     @pyqtSlot(str)
     def append_log(self, message):
         self.log_output.appendPlainText(message)
+
 
     def safe_append_log(self, message: str):
         QMetaObject.invokeMethod(self, "append_log", Qt.QueuedConnection, Q_ARG(str, message))
@@ -524,25 +422,37 @@ class VideoGeneratorApp(QWidget):
 
         try:
             log(f"🎤 Đang tạo giọng với Voice ID: {voice_id}")
-
             for f in [audio_file, sub_file, temp_video]:
-                if os.path.exists(f):
-                    os.remove(f)
-                    log(f"🧹 Xóa file tạm: {f}")
-
+                try:
+                    if os.path.exists(f):
+                        os.remove(f)
+                        log(f"🧹 Đã xóa file tạm: {f}")
+                except Exception as cleanup_err:
+                    log(f"⚠️ Không thể xoá file tạm {f}: {cleanup_err}")
+    
             create_or_replace_voice(text, audio_file, api_key, voice_id=voice_id)
             log("📝 Tạo giọng và lưu file audio thành công")
 
-            subtitle_mode = self.subtitle_mode_selector.currentText()
-            if subtitle_mode == "Tạo tự động bằng ElevenLabs (video)":
-                language_code = self.language_code_selector.currentText()
-                log(f"📝 Gửi audio đến ElevenLabs để tạo phụ đề tự động (ngôn ngữ: {language_code})")
-                generate_srt_from_audio(audio_file, sub_file, api_key, language_code=language_code)
-                log("✅ Đã tạo phụ đề từ ElevenLabs thành công")
-            else:
-                log("📝 Tạo phụ đề Từ văn bản nhập (shorts)")
-                create_srt_word_by_word(audio_file, text, sub_file)
-                log("✅ Đã tạo phụ đề từ văn bản")
+            log("🧠 Đang dùng ElevenLabs để tạo phụ đề...")
+            trans_result = transcribe_audio(
+                    audio_path=audio_file,
+                    output_base=f"video_{index+1}",
+                    api_key=api_key
+                )
+            sub_file = trans_result["srt_path"]
+            karaoke_json = trans_result["karaoke_path"]
+
+            log("✨ Đang tạo file karaoke .ass từ ElevenLabs...")
+            ass_file = os.path.join("outputs", f"video_{index+1}.ass")
+            generate_karaoke_ass_from_srt_and_words(
+                    sub_file,
+                    karaoke_json,
+                    ass_file,
+                    font=self.font_selector.currentText(),
+                    size = int(self.subtitle_font_size_selector.currentText())
+                )
+            log(f"🎉 Đã tạo file phụ đề .ass: {ass_file}")
+
 
             duration = AudioSegment.from_file(audio_file).duration_seconds
             log(f"⏳ Độ dài audio: {duration:.2f} giây")
@@ -570,8 +480,7 @@ class VideoGeneratorApp(QWidget):
 
             font_name = self.font_selector.currentText()
             font_size = self.subtitle_font_size_selector.currentText()
-            font_color_hex = self.subtitle_color_selector.currentData() or "00FFFF"  # fallback nếu không chọn
-            subtitle_visible = self.subtitle_display_selector.currentText() == "Hiển thị phụ đề"
+            font_color_hex = self.subtitle_color_selector.currentData() or "00FFFF"
 
 
             background_music = self.music_selector.currentText()
@@ -589,21 +498,19 @@ class VideoGeneratorApp(QWidget):
                 music_volume = 30
             log(f"🔊 Âm lượng nhạc nền: {music_volume}%")
 
-            # Kiểm tra có hiển thị phụ đề không
-            hide_subtitle = self.subtitle_display_selector.currentText() == "Ẩn phụ đề"
-            if hide_subtitle:
-                log("👁️‍🗨️ Đã chọn ẩn phụ đề trong video")
+
+
+            print(f"[DEBUG] Xuất ra: {output_path} | type: {type(output_path)}")
 
             # Gọi hàm render
             burn_sub_and_audio(
-                video=temp_video,
-                srt=sub_file,
-                audio=audio_file,
-                output=output_path,
+                video_path=temp_video,
+                srt_path=ass_file,
+                voice_path=audio_file,
+                output_path=output_path,
                 font_name=font_name,
                 font_size=font_size,
                 font_color=font_color_hex,
-                show_subtitle=subtitle_visible,
                 bg_music_path=music_path,
                 bg_music_volume=music_volume
             )
@@ -624,3 +531,13 @@ class VideoGeneratorApp(QWidget):
                     log(f"🧹 Đã xóa file tạm: {f}")
             except Exception as cleanup_err:
                 log(f"⚠️ Không thể xoá file tạm {f}: {cleanup_err}")
+
+        extra_temp_files = [ass_file, karaoke_json]
+        for f in extra_temp_files:
+            try:
+                if os.path.exists(f):
+                    os.remove(f)
+                    log(f"🧹 Đã xóa file phụ trợ: {f}")
+            except Exception as cleanup_err:
+                log(f"⚠️ Không thể xoá file phụ trợ {f}: {cleanup_err}")
+
