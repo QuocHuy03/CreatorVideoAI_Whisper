@@ -70,7 +70,6 @@ def apply_random_effect(clip, width, height):
 
 
 def create_video_randomized_media(media_files, total_duration, change_every, word_count, output_file, is_vertical=True, transition_effect="fade"):
-
     clips = []
     num_segments = max(1, word_count // change_every)
     duration_per_segment = total_duration / num_segments
@@ -93,12 +92,13 @@ def create_video_randomized_media(media_files, total_duration, change_every, wor
             try:
                 if ext in [".jpg", ".png"]:
                     print(f"🖼️ Đang xử lý ảnh: {file}")
-                    img = ImageClip(file, duration=5)  # Chỉnh lại thời gian hiển thị ảnh 5 giây
+                    # Đặt thời gian ảnh lâu hơn, ở đây tôi cho mỗi ảnh là 5 giây
+                    img = ImageClip(file, duration=5)  # Chỉnh lại thời gian cho mỗi ảnh
                     valid_clip = resize_and_crop_center(img, width, height)
-
+ 
                 elif ext in [".mp4", ".mov"] and is_valid_video(file):
                     print(f"🎞️ Đang xử lý video: {file}")
-                    video = VideoFileClip(file)
+                    video = VideoFileClip(file, duration=5)
                     subclip = video.subclip(0, min(duration_per_segment, video.duration))
                     subclip.filename = file  # để in log
                     valid_clip = resize_and_crop_center(subclip, width, height)
@@ -123,6 +123,8 @@ def create_video_randomized_media(media_files, total_duration, change_every, wor
         print(f"✅ Xuất video hoàn tất: {output_file}")
     else:
         raise Exception("❌ Không có clip hợp lệ nào để tạo video.")
+
+
 
 def percent_to_db(percent):
     """Chuyển % volume về decibel tương đối (dB giảm)."""
