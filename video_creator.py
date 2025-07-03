@@ -98,7 +98,7 @@ def create_video_randomized_media(media_files, total_duration, change_every, wor
  
                 elif ext in [".mp4", ".mov"] and is_valid_video(file):
                     print(f"🎞️ Đang xử lý video: {file}")
-                    video = VideoFileClip(file, duration=5)
+                    video = VideoFileClip(file)
                     subclip = video.subclip(0, min(duration_per_segment, video.duration))
                     subclip.filename = file  # để in log
                     valid_clip = resize_and_crop_center(subclip, width, height)
@@ -186,33 +186,43 @@ def burn_sub_and_audio(video_path, srt_path, voice_path, output_path,
             f"force_style='FontName={font_name},FontSize={font_size},PrimaryColour={ff_color},Alignment=2,MarginV=9'"
         )
 
-    # Gọi ffmpeg
-    try:
-        input_video = ffmpeg.input(video_path, t=voice_duration)
-        input_audio = ffmpeg.input(audio_path)
+    # Thử lại tối đa 3 lần nếu lỗi
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+        try:
+            print(f"🚀 Render attempt {attempt}...")
+            input_video = ffmpeg.input(video_path, t=voice_duration)
+            input_audio = ffmpeg.input(audio_path)
 
-        # Sử dụng video và âm thanh đã được xử lý
-        (
-            ffmpeg
-            .output(
-                input_video,
-                input_audio,
-                output_path,
-                vf=subtitle_filter,
-                vcodec="libx264",
-                acodec="aac",
-                preset="ultrafast",
-                pix_fmt="yuv420p",
+            (
+                ffmpeg
+                .output(
+                    input_video,
+                    input_audio,
+                    output_path,
+                    vf=subtitle_filter,
+                    vcodec="libx264",
+                    acodec="aac",
+                    preset="ultrafast",
+                    pix_fmt="yuv420p",
+                )
+                .overwrite_output()
+                .run()
             )
-            .overwrite_output()
-            .run()
-        )
 
-        print(f"✅ Xuất video hoàn tất: {output_path}")
+            print(f"✅ Xuất video hoàn tất: {output_path}")
+            break  # ✅ Thành công, thoát khỏi vòng lặp
 
-    except ffmpeg.Error as e:
-        print("❌ Lỗi khi render video với ffmpeg-python:")
-        print(e.stderr.decode() if e.stderr else str(e))
+        except ffmpeg.Error as e:
+            print(f"❌ Lỗi render (lần {attempt}):")
+            print(e.stderr.decode() if e.stderr else str(e))
+
+            if attempt < max_retries:
+                print("🔁 Đợi 1.5s rồi thử lại...")
+                time.sleep(1.5)
+            else:
+                print("❌ Render thất bại sau 3 lần thử.")
+                raise e
 
     # Xóa file âm thanh tạm nếu có
     if temp_combined_audio and os.path.exists(temp_combined_audio):

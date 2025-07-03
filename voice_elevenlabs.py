@@ -33,7 +33,7 @@ def format_proxy(raw_proxy):
     else:
         raise ValueError(f"❌ Proxy không đúng định dạng: {raw_proxy}")
 
-def send_with_proxy_retry(method, url, headers=None, json_data=None, files=None, data=None, max_retries=5):
+def send_with_proxy_retry(method, url, headers=None, json_data=None, files_path=None, data=None, max_retries=5):
     proxy_list = get_proxy_list()
     random.shuffle(proxy_list)
 
@@ -41,25 +41,46 @@ def send_with_proxy_retry(method, url, headers=None, json_data=None, files=None,
         try:
             proxy = format_proxy(raw_proxy)
             print(f"🔁 [Thử {attempt}] Đang thử với proxy: {raw_proxy}")
-            res = requests.request(
-                method=method,
-                url=url,
-                headers=headers,
-                json=json_data,
-                files=files,
-                data=data,
-                proxies=proxy,
-                timeout=15
-            )
+
+            # Nếu có file path thì mở lại mỗi lần
+            if files_path:
+                file_key, file_path, mime = files_path
+                with open(file_path, "rb") as f:
+                    files = {
+                        file_key: (os.path.basename(file_path), f, mime)
+                    }
+                    res = requests.request(
+                        method=method,
+                        url=url,
+                        headers=headers,
+                        json=json_data,
+                        files=files,
+                        data=data,
+                        proxies=proxy,
+                        timeout=15
+                    )
+            else:
+                res = requests.request(
+                    method=method,
+                    url=url,
+                    headers=headers,
+                    json=json_data,
+                    data=data,
+                    proxies=proxy,
+                    timeout=15
+                )
+
             if res.status_code == 200:
                 return res
             else:
                 print(f"⚠️ Lỗi HTTP {res.status_code} - thử tiếp...")
+                print(res.text[:500])
         except Exception as e:
             print(f"❌ Proxy lỗi ({raw_proxy}): {e}")
             continue
 
     raise Exception("❌ Tất cả proxy đều thất bại!")
+
 
 def create_voice(text, output_file, api_key, voice_id="EXAVITQu4vr4xnSDxMaL", use_proxy=True):
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
@@ -129,32 +150,33 @@ def transcribe_audio(audio_path, folder_path, output_base="output", api_key=None
     srt_path = os.path.join(output_dir, f"{output_base}.srt")
     json_path = os.path.join(output_dir, f"{output_base}.json")
 
-    with open(audio_path, "rb") as f:
-        files = {
-            "file": (os.path.basename(audio_path), f, "audio/mpeg")
-        }
+    payload = {
+        "model_id": "scribe_v1",
+        "diarize": "true",
+        "additional_formats": json.dumps([{
+            "format": "srt",
+            "include_timestamps": True,
+            "include_speakers": False,
+            "max_characters_per_line": 26,
+            "segment_on_silence_longer_than_s": 1.2,
+            "max_segment_duration_s": 6,
+            "max_segment_chars": 24
+        }])
+    }
 
-        payload = {
-            "model_id": "scribe_v1",
-            "language_code": language_code,
-            "diarize": "true",
-            "additional_formats": json.dumps([{
-                "format": "srt",
-                "include_timestamps": True,
-                "include_speakers": False,
-                "max_characters_per_line": 26,
-                "segment_on_silence_longer_than_s": 1.2,
-                "max_segment_duration_s": 6,
-                "max_segment_chars": 24
-            }])
-        }
+    if language_code:
+        payload["language_code"] = language_code
 
-        url = "https://api.elevenlabs.io/v1/speech-to-text"
-        headers = {"xi-api-key": api_key}
+    url = "https://api.elevenlabs.io/v1/speech-to-text"
+    headers = {"xi-api-key": api_key}
 
-        if use_proxy:
-            res = send_with_proxy_retry("POST", url, headers=headers, data=payload, files=files)
-        else:
+    if use_proxy:
+        # Gửi kèm đường dẫn để send_with_proxy_retry mở lại file mỗi lần
+        files_path = ("file", audio_path, "audio/mpeg")
+        res = send_with_proxy_retry("POST", url, headers=headers, data=payload, files_path=files_path)
+    else:
+        with open(audio_path, "rb") as f:
+            files = {"file": (os.path.basename(audio_path), f, "audio/mpeg")}
             res = requests.post(url, headers=headers, files=files, data=payload)
 
     if not res.ok:
@@ -175,10 +197,12 @@ def transcribe_audio(audio_path, folder_path, output_base="output", api_key=None
     else:
         raise Exception("❌ Không có word-level data!")
 
+    print("✅ Đã xử lý xong phụ đề và karaoke JSON")
     return {
         "srt_path": srt_path,
         "karaoke_path": json_path
     }
+
 
 
 # === 🔄 Giao diện quản lý giọng nói ===
