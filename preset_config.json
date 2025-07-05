@@ -1,10 +1,8 @@
 {
-  "api_key": "sk_e5c77364a55b0a7f4da8690c58dc6adfd4886d29878a026a",
-  "voice_id": "BUPPIXeDaJWBz696iXRS",
   "ratio": "Dọc (9:16)",
-  "font": "Helvetica",
+  "font": "Comic Sans MS",
   "font_size": "10",
-  "font_color": "000000",
+  "font_color": "FFFFFF",
   "music": "Cybernetic-Dreams-chosic.com_.mp3",
-  "volume": "40%"
+  "volume": "10%"
 }

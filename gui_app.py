@@ -1,6 +1,5 @@
 import os
-import random
-import subprocess
+import time
 import requests
 import concurrent.futures
 from PyQt5.QtWidgets import (
@@ -11,13 +10,13 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QMetaObject, Q_ARG, pyqtSlot
 from PyQt5.QtGui import QFont
 from pydub import AudioSegment
-from voice_elevenlabs import transcribe_audio, create_or_replace_voice, generate_karaoke_ass_from_srt_and_words, validate_api_key
+from voice_google import transcribe_audio, generate_karaoke_ass_from_srt_and_words, fetch_api_keys, create_voice_with_retry
 from video_creator import create_video_randomized_media, burn_sub_and_audio
 
 
 def fetch_languages():
     try:
-        response = requests.get("http://62.171.131.164:5000/api/get_languages", timeout=5)
+        response = requests.get("http://62.171.131.164:5000/api/get_gemini_languages", timeout=5)
         if response.ok:
             return response.json().get("languages", [])
     except Exception as e:
@@ -25,15 +24,32 @@ def fetch_languages():
     return []
 
 
+def safe_remove_file(file_path, log_func=None, retries=5, delay=0.5):
+        for attempt in range(retries):
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    if log_func:
+                        log_func(f"🧹 Đã xóa file: {file_path}")
+                    return True
+                else:
+                    return True
+            except PermissionError:
+                if log_func:
+                    log_func(f"⚠️ File đang được sử dụng, thử lại lần {attempt + 1}/{retries}: {file_path}")
+                time.sleep(delay)
+        if log_func:
+            log_func(f"❌ Không thể xóa file sau {retries} lần thử: {file_path}")
+        return False
+
 
 MAX_THREADS = 3
+
 
 class VideoGeneratorApp(QWidget):
 
     def save_preset(self):
         preset = {
-            "api_key": self.api_key_input.text(),
-            "voice_id": self.voice_id_input.text(),
             "ratio": self.ratio_selector.currentText(),
             "font": self.font_selector.currentText(),
             "font_size": self.subtitle_font_size_selector.currentText(),
@@ -55,8 +71,6 @@ class VideoGeneratorApp(QWidget):
             import json
             with open("preset_config.json", "r", encoding="utf-8") as f:
                 preset = json.load(f)
-            self.api_key_input.setText(preset.get("api_key", ""))
-            self.voice_id_input.setText(preset.get("voice_id", ""))
             self.ratio_selector.setCurrentText(preset.get("ratio", "Dọc (9:16)"))
             self.font_selector.setCurrentText(preset.get("font", "Playbill"))
             self.subtitle_font_size_selector.setCurrentText(preset.get("font_size", "15"))
@@ -83,11 +97,11 @@ class VideoGeneratorApp(QWidget):
             "Candara", "Playbill", "Consolas", "Century Gothic", "Calibri"
         ]
 
-        main_layout = QHBoxLayout()  # Sử dụng QHBoxLayout để chia layout thành 2 cột
+        main_layout = QHBoxLayout()
         main_layout.setContentsMargins(10, 10, 10, 10)
         main_layout.setSpacing(10)
 
-        # Cột trái (Form chính)
+        # === CỘT TRÁI ===
         left_column_layout = QVBoxLayout()
 
         # --- Preset Buttons ---
@@ -104,35 +118,34 @@ class VideoGeneratorApp(QWidget):
 
         left_column_layout.addLayout(preset_buttons_layout)
 
-        # --- API Key + Folder ---
+        # --- TOP ROW: Voice + Folder + Font Settings ---
         top_h_layout = QHBoxLayout()
         top_h_layout.setSpacing(10)
 
-        api_group = QGroupBox("🔐 Cấu hình ElevenLabs API")
+        # Voice config
+        api_group = QGroupBox("🔐 Setting Voice")
         api_layout = QHBoxLayout()
-        api_layout.addWidget(QLabel("API Key:"))
-        self.api_key_input = QLineEdit()
-        api_layout.addWidget(self.api_key_input)
-
-        api_layout.addWidget(QLabel("Voice ID:"))
-        self.voice_id_input = QLineEdit()
-        api_layout.addWidget(self.voice_id_input)
+        voices = [
+            "achernar", "achird", "algenib", "algieba", "alnilam", "aoede", "autonoe", "callirrhoe", 
+            "charon", "despina", "enceladus", "erinome", "fenrir", "gacrux", "iapetus", "kore", 
+            "laomedeia", "leda", "orus", "puck", "pulcherrima", "rasalgethi", "sadachbia", "sadaltager", 
+            "schedar", "sulafat", "umbriel", "vindemiatrix", "zephyr", "zubenelgenubi"
+        ]
+        api_layout.addWidget(QLabel("Voice:"))
+        self.voice_selector = QComboBox()
+        self.voice_selector.addItems(voices)
+        api_layout.addWidget(self.voice_selector)
         api_group.setLayout(api_layout)
 
-        folder_group = QGroupBox("📁 Chọn thư mục media")
+        # Folder selection
+        folder_group = QGroupBox("📁 Folder media")
         folder_layout = QHBoxLayout()
         self.select_folder_btn = QPushButton("Chọn thư mục")
         self.select_folder_btn.clicked.connect(self.select_folder)
         folder_layout.addWidget(self.select_folder_btn)
         folder_group.setLayout(folder_layout)
 
-        top_h_layout.addWidget(api_group, 2)
-        top_h_layout.addWidget(folder_group, 1)
-        left_column_layout.addLayout(top_h_layout)
-
-        # --- Video & Music Settings ---
-        second_h_layout = QHBoxLayout()
-
+        # Font Settings
         settings_group = QGroupBox("🎞️ Video Font Settings")
         settings_layout = QHBoxLayout()
         settings_layout.addWidget(QLabel("Tỉ lệ video:"))
@@ -146,6 +159,13 @@ class VideoGeneratorApp(QWidget):
         settings_layout.addWidget(self.font_selector)
         settings_group.setLayout(settings_layout)
 
+        # Add 3 group boxes vào hàng đầu
+        top_h_layout.addWidget(api_group, 3)
+        top_h_layout.addWidget(folder_group, 3)
+        top_h_layout.addWidget(settings_group, 4)
+        left_column_layout.addLayout(top_h_layout)
+
+        # --- Subtitle Options ---
         subtitle_group = QGroupBox("📜 Subtitle Options")
         subtitle_layout = QHBoxLayout()
         subtitle_layout.addWidget(QLabel("Cỡ chữ:"))
@@ -172,32 +192,26 @@ class VideoGeneratorApp(QWidget):
         self.subtitle_color_selector.addItem("Cam", "FF4500")
         self.subtitle_color_selector.addItem("Tím Pastel", "D8BFD8")
         self.subtitle_color_selector.addItem("Hồng", "FFC0CB")
-
-        # Màu mặc định
         self.subtitle_color_selector.setCurrentText("Xanh Dương")
-
         subtitle_layout.addWidget(self.subtitle_color_selector)
 
-
+        subtitle_layout.addWidget(QLabel("Vị trí phụ đề:"))
+        self.subtitle_position_selector = QComboBox()
+        self.subtitle_position_selector.addItems(["Dưới", "Giữa", "Trên"])
+        subtitle_layout.addWidget(self.subtitle_position_selector)
 
         subtitle_layout.addWidget(QLabel("Ngôn ngữ:"))
         self.language_selector = QComboBox()
         self.languages = fetch_languages()
-
-        self.language_selector.addItem("🔍 Auto Detect", None)  # Đây là mặc định
-
+        self.language_selector.addItem("🔍 Auto Detect", None)
         if self.languages:
             for lang in self.languages:
                 self.language_selector.addItem(lang["name"], lang["code"])
-
         subtitle_layout.addWidget(self.language_selector)
-
         subtitle_group.setLayout(subtitle_layout)
+        left_column_layout.addWidget(subtitle_group)
 
-        second_h_layout.addWidget(settings_group, 2)
-        second_h_layout.addWidget(subtitle_group, 2)
-        left_column_layout.addLayout(second_h_layout)
-
+        # --- Background Music ---
         music_group = QGroupBox("🎵 Background Music")
         music_layout = QHBoxLayout()
         music_layout.addWidget(QLabel("Nhạc nền:"))
@@ -211,7 +225,6 @@ class VideoGeneratorApp(QWidget):
             self.music_selector.addItems(music_files)
         else:
             self.music_selector.addItem("Không có nhạc nền")
-
         music_layout.addWidget(self.music_selector)
 
         music_layout.addWidget(QLabel("Âm lượng:"))
@@ -220,10 +233,9 @@ class VideoGeneratorApp(QWidget):
         self.volume_selector.setCurrentText("30%")
         music_layout.addWidget(self.volume_selector)
         music_group.setLayout(music_layout)
-
         left_column_layout.addWidget(music_group)
 
-        # --- Text input ---
+        # --- Text Input ---
         text_group = QGroupBox("📝 Video Text Content")
         text_layout = QVBoxLayout()
         self.text_input = QTextEdit()
@@ -232,62 +244,43 @@ class VideoGeneratorApp(QWidget):
         text_group.setLayout(text_layout)
         left_column_layout.addWidget(text_group)
 
-        # Add Left column layout to the main layout (first column)
-        main_layout.addLayout(left_column_layout, 4)  # Tăng tỷ lệ cho cột trái
+        main_layout.addLayout(left_column_layout, 4)
 
-        # --- Right column layout ---
+        # === CỘT PHẢI ===
         right_column_layout = QVBoxLayout()
 
-        # --- Log output GroupBox ---
         log_group = QGroupBox("📋 Log Output")
         log_group.setStyleSheet("QGroupBox { font-weight: bold; }")
         log_layout = QVBoxLayout()
-
-        # Log Output widget
         self.log_output = QPlainTextEdit()
         self.log_output.setReadOnly(True)
         self.log_output.setPlaceholderText("📋 Log chi tiết sẽ hiển thị tại đây...")
         log_layout.addWidget(self.log_output)
-
         log_group.setLayout(log_layout)
 
-        # --- Table GroupBox ---
         table_group = QGroupBox("📊 Table: Video Status")
         table_group.setStyleSheet("QGroupBox { font-weight: bold; }")
         table_layout = QVBoxLayout()
-
-        # Table widget
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(["Nội dung", "Trạng thái", "Font chữ", "Âm thanh", "Tỉ lệ Video", "Xem Video"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         table_layout.addWidget(self.table)
-
         table_group.setLayout(table_layout)
 
-        # Add Log GroupBox, Table GroupBox, and other components to right_column_layout
-        right_column_layout.addWidget(log_group)  # Add Log Output group
-        right_column_layout.addWidget(table_group)  # Add Table group
-
-        # --- Bottom section for progress and render button ---
         bottom_section_layout = QVBoxLayout()
-
-        # --- Progress Bar ---
         self.progress = QProgressBar()
         self.progress.setTextVisible(True)
         bottom_section_layout.addWidget(self.progress)
 
-        # --- Generate Button ---
         self.generate_btn = QPushButton("🚀 Tạo Video")
         self.generate_btn.clicked.connect(self.start_batch_generation)
         bottom_section_layout.addWidget(self.generate_btn)
 
-        # Add bottom section layout to right column layout
+        right_column_layout.addWidget(log_group)
+        right_column_layout.addWidget(table_group)
         right_column_layout.addLayout(bottom_section_layout)
 
-        # Add right_column_layout to main layout (second column)
-        main_layout.addLayout(right_column_layout, 3)  # Right column takes less space
-
-        # Set main layout
+        main_layout.addLayout(right_column_layout, 3)
         self.setLayout(main_layout)
 
 
@@ -337,76 +330,6 @@ class VideoGeneratorApp(QWidget):
         if folder:
             self.folder_path = folder
             self.select_folder_btn.setText(f"📁 Đã chọn: {folder}")
-
-
-
-    def start_batch_generation(self):
-        if not self.folder_path:
-            QMessageBox.warning(self, "Thiếu thông tin", "Bạn cần chọn thư mục media trước.")
-            return
-
-        raw_text = self.text_input.toPlainText().strip()
-        if not raw_text:
-            QMessageBox.warning(self, "Thiếu văn bản", "Bạn cần nhập danh sách nội dung video.")
-            return
-
-        api_key = self.api_key_input.text().strip()
-        if not api_key:
-            QMessageBox.warning(self, "Thiếu API Key", "Vui lòng nhập API Key của ElevenLabs")
-            return
-
-        self.text_list = [txt.strip() for txt in raw_text.split("==|==") if txt.strip()]
-        total_jobs = len(self.text_list)
-
-        if total_jobs == 0:
-            QMessageBox.warning(self, "Không có nội dung", "Vui lòng nhập ít nhất một đoạn text.")
-            return
-
-        # 👉 Cho phép chọn thư mục lưu video
-        self.output_folder = QFileDialog.getExistingDirectory(self, "Chọn thư mục lưu video")
-        if not self.output_folder:
-            QMessageBox.warning(self, "Chưa chọn thư mục lưu", "Bạn cần chọn thư mục để lưu video.")
-            return
-        
-
-        if not validate_api_key(api_key):
-            QMessageBox.critical(self, "API Key không hợp lệ", "API Key ElevenLabs không hợp lệ hoặc không thể kết nối.")
-            return 
-
-        # Clear log cũ trước khi chạy batch mới
-        self.log_output.clear()
-        self.generate_btn.setEnabled(False)
-        self.generate_btn.setText("🔄 Đang xử lý...")
-
-        self.progress.setMaximum(total_jobs)
-        self.progress.setValue(0)
-        self.table.setRowCount(0)
-
-        # ✅ Không còn dùng OUTPUT_FOLDER cố định nữa
-        for f in os.listdir(self.output_folder):
-            try:
-                os.remove(os.path.join(self.output_folder, f))
-            except:
-                pass  # có thể do file đang bị khóa, bỏ qua
-
-        self.jobs_completed = 0
-        self.total_jobs = total_jobs
-
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_THREADS)
-        futures = []
-
-        def update_progress_and_check(future):
-            self.jobs_completed += 1
-            if self.jobs_completed == self.total_jobs:
-                self.generate_btn.setEnabled(True)
-                self.generate_btn.setText("🚀 Tạo Video")
-
-        for idx, text in enumerate(self.text_list):
-            output_filename = os.path.join(self.output_folder, f"video_{idx+1}.mp4")
-            self.add_table_row(idx, text)
-            future = executor.submit(self.run_video_job, text, self.folder_path, output_filename, api_key, idx)
-            future.add_done_callback(update_progress_and_check)
-
 
 
 
@@ -464,23 +387,94 @@ class VideoGeneratorApp(QWidget):
 
 
 
+    def start_batch_generation(self):
+        if not self.folder_path:
+            QMessageBox.warning(self, "Thiếu thông tin", "Bạn cần chọn thư mục media trước.")
+            return
 
-    def run_video_job(self, text, folder_path, output_path, api_key, index):
+        raw_text = self.text_input.toPlainText().strip()
+        if not raw_text:
+            QMessageBox.warning(self, "Thiếu văn bản", "Bạn cần nhập danh sách nội dung video.")
+            return
+
+        # Fetch the API key dynamically (use Google Gemini API with proxy retries)
+        try:
+            api_key_list = fetch_api_keys()  # Fetch a list of available API keys
+            if not api_key_list:
+                raise Exception("❌ Không có API keys hợp lệ.")
+            api_key = api_key_list  # Assign the list directly, no need to fetch again
+        except Exception as e:
+            QMessageBox.warning(self, "Thiếu API Key", f"Không thể lấy API Key: {str(e)}")
+            return
+
+        self.text_list = [txt.strip() for txt in raw_text.split("==|==") if txt.strip()]
+        total_jobs = len(self.text_list)
+
+        if total_jobs == 0:
+            QMessageBox.warning(self, "Không có nội dung", "Vui lòng nhập ít nhất một đoạn text.")
+            return
+
+        # Allow the user to choose the folder to save videos
+        self.output_folder = QFileDialog.getExistingDirectory(self, "Chọn thư mục lưu video")
+        if not self.output_folder:
+            QMessageBox.warning(self, "Chưa chọn thư mục lưu", "Bạn cần chọn thư mục để lưu video.")
+            return
+
+        # Clear old logs before running a new batch
+        self.log_output.clear()
+        self.generate_btn.setEnabled(False)
+        self.generate_btn.setText("🔄 Đang xử lý...")
+
+        self.progress.setMaximum(total_jobs)
+        self.progress.setValue(0)
+        self.table.setRowCount(0)
+
+        # Clean up previous temporary files in the output folder
+        for f in os.listdir(self.output_folder):
+            try:
+                os.remove(os.path.join(self.output_folder, f))
+            except:
+                pass  # If file is locked or can't be removed, skip it
+
+        self.jobs_completed = 0
+        self.total_jobs = total_jobs
+
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_THREADS)
+        futures = []
+
+        def update_progress_and_check(future):
+            self.jobs_completed += 1
+            if self.jobs_completed == self.total_jobs:
+                self.generate_btn.setEnabled(True)
+                self.generate_btn.setText("🚀 Tạo Video")
+
+        # Run jobs for each text entry
+        for idx, text in enumerate(self.text_list):
+            output_filename = os.path.join(self.output_folder, f"video_{idx+1}.mp4")
+            self.add_table_row(idx, text)
+            future = executor.submit(self.run_video_job, text, self.folder_path, output_filename, api_key_list, idx)
+            future.add_done_callback(update_progress_and_check)
+
+
+
+    def run_video_job(self, text, folder_path, output_path, api_key_list, index):
         def log(msg):
             self.safe_append_log(f"[Video #{index + 1}] {msg}")
 
         log("🔄 Bắt đầu xử lý")
 
-        audio_file = f"temp_audio_{index}.mp3"
+        audio_file = f"temp_audio_{index}.mp3"  # Tên file audio đã định nghĩa
         sub_file = f"temp_sub_{index}.srt"
         temp_video = f"temp_video_{index}.mp4"
 
-        voice_id = self.voice_id_input.text().strip()
+        voice_id = self.voice_selector.currentText()  # Get the selected voice
         if not voice_id:
-            voice_id = "EXAVITQu4vr4xnSDxMaL"
+            voice_id = "achird"  # Default voice in case no voice is selected
 
         try:
             log(f"🎤 Đang tạo giọng với Voice ID: {voice_id}")
+            
+            # Cleanup temporary files before proceeding
             for f in [audio_file, sub_file, temp_video]:
                 try:
                     if os.path.exists(f):
@@ -488,39 +482,43 @@ class VideoGeneratorApp(QWidget):
                         log(f"🧹 Đã xóa file tạm: {f}")
                 except Exception as cleanup_err:
                     log(f"⚠️ Không thể xoá file tạm {f}: {cleanup_err}")
-    
-            create_or_replace_voice(text, audio_file, api_key, voice_id=voice_id)
+            
+            # Generate audio with retry
+            audio_file = create_voice_with_retry(text, audio_file, api_key_list, voice_name=voice_id)  # Get the correct audio file path
             log("📝 Tạo giọng và lưu file audio thành công")
 
-            language_code = self.language_selector.currentData()  # Có thể là None
+            # Get language code for transcription
+            language_code = self.language_selector.currentData()
 
             if language_code:
                 log(f"🗣️ Ngôn ngữ chọn: {language_code}")
             else:
                 log("🗣️ Đang sử dụng chế độ Auto Detect (không gửi language_code)")
 
-            log("🧠 Đang dùng ElevenLabs để tạo phụ đề...")
+            log("🧠 Đang dùng fast-whisper để tạo phụ đề...")
             trans_result = transcribe_audio(
-                    audio_path=audio_file,
+                    audio_path=audio_file,  # Use the correct audio file path here
                     folder_path=self.output_folder,
-                    output_base=f"video_{index+1}",
-                    api_key=api_key,
+                    output_base=f"video_{index + 1}",
                     language_code=language_code
                 )
             sub_file = trans_result["srt_path"]
             karaoke_json = trans_result["karaoke_path"]
 
-            log("✨ Đang tạo file karaoke .ass từ ElevenLabs...")
-            ass_file = os.path.join(self.output_folder, f"video_{index+1}.ass")
+            log("✨ Đang tạo file karaoke .ass từ fast-whisper...")
+            ass_file = os.path.join(self.output_folder, f"video_{index + 1}.ass")
+            position = self.subtitle_position_selector.currentText().lower()  # "dưới", "giữa", "trên"
+            color_hex = self.subtitle_color_selector.currentData() # color font
             generate_karaoke_ass_from_srt_and_words(
-                    sub_file,
-                    karaoke_json,
-                    ass_file,
-                    font=self.font_selector.currentText(),
-                    size = int(self.subtitle_font_size_selector.currentText())
-                )
+                sub_file,
+                karaoke_json,
+                ass_file,
+                font=self.font_selector.currentText(),
+                size=int(self.subtitle_font_size_selector.currentText()),
+                position=position,
+                color=color_hex
+            )
             log(f"🎉 Đã tạo file phụ đề .ass: {ass_file}")
-
 
             duration = AudioSegment.from_file(audio_file).duration_seconds
             log(f"⏳ Độ dài audio: {duration:.2f} giây")
@@ -550,7 +548,6 @@ class VideoGeneratorApp(QWidget):
             font_size = self.subtitle_font_size_selector.currentText()
             font_color_hex = self.subtitle_color_selector.currentData() or "00FFFF"
 
-
             background_music = self.music_selector.currentText()
             music_path = os.path.join("background_music", background_music)
             if not os.path.exists(music_path) or background_music == "Không có nhạc nền":
@@ -566,11 +563,7 @@ class VideoGeneratorApp(QWidget):
                 music_volume = 30
             log(f"🔊 Âm lượng nhạc nền: {music_volume}%")
 
-
-
-            print(f"[DEBUG] Xuất ra: {output_path} | type: {type(output_path)}")
-
-            # Gọi hàm render
+            # Render final video with subtitles and background audio
             burn_sub_and_audio(
                 video_path=temp_video,
                 srt_path=ass_file,
@@ -584,7 +577,6 @@ class VideoGeneratorApp(QWidget):
             )
 
             log("🎬 Video cuối cùng đã được render và lưu")
-
             self.safe_update_status(index, "✅ Hoàn thành")
 
         except Exception as e:
@@ -592,21 +584,8 @@ class VideoGeneratorApp(QWidget):
             self.safe_update_status(index, "❌ Lỗi")
             return
 
+        # Xóa file tạm sau khi xong
+        for f in [ass_file, karaoke_json]:
+            safe_remove_file(f, log_func=log)
         for f in [audio_file, sub_file, temp_video]:
-            try:
-                if os.path.exists(f):
-                    os.remove(f)
-                    log(f"🧹 Đã xóa file tạm: {f}")
-            except Exception as cleanup_err:
-                log(f"⚠️ Không thể xoá file tạm {f}: {cleanup_err}")
-
-        extra_temp_files = [ass_file, karaoke_json]
-        for f in extra_temp_files:
-            try:
-                if os.path.exists(f):
-                    os.remove(f)
-                    log(f"🧹 Đã xóa file phụ trợ: {f}")
-            except Exception as cleanup_err:
-                log(f"⚠️ Không thể xoá file phụ trợ {f}: {cleanup_err}")
-
-
+            safe_remove_file(f, log_func=log)
