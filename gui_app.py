@@ -85,7 +85,7 @@ class VideoGeneratorApp(QWidget):
 
 
     def setup_ui(self):
-        self.setWindowTitle("🎬 AI Video Generator v1.1 - @huyit32")
+        self.setWindowTitle("🎬 AI Video Generator v1.0 - @huyit32")
         self.setGeometry(200, 200, 1340, 900)
 
         self.folder_path = ""
