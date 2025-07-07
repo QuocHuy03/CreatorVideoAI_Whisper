@@ -9,6 +9,7 @@ from pathlib import Path
 from moviepy.video.fx.all import fadein, fadeout
 from PIL import Image
 
+
 def is_valid_video(path):
     try:
         clip = VideoFileClip(path)
@@ -19,15 +20,20 @@ def is_valid_video(path):
 
 
 def resize_and_crop_center(clip, target_width, target_height):
-    # Resize theo chiều phù hợp
-    clip = clip.resize(width=target_width)
-    if clip.h < target_height:
-        clip = clip.resize(height=target_height)
+    """Ensure the clip is resized to the target width and height while preserving aspect ratio."""
+    # Resize while maintaining aspect ratio
+    clip = clip.resize(width=target_width) if clip.w > target_width else clip
+    clip = clip.resize(height=target_height) if clip.h > target_height else clip
 
-    # In log kích thước sau resize
+    # Log the new size
     print(f"🔧 Đã resize: {clip.filename if hasattr(clip, 'filename') else 'Image'} → size sau: {clip.w}x{clip.h}")
 
-    # Crop phần giữa
+    # If after resizing, clip dimensions are still smaller, apply padding instead of cropping
+    if clip.w < target_width or clip.h < target_height:
+        print(f"⚠️ Không thể crop đúng kích thước {target_width}x{target_height}. Sử dụng padding.")
+        clip = clip.resize(width=target_width, height=target_height)
+
+    # Crop the center of the clip to get the desired dimensions
     x_center = clip.w // 2
     y_center = clip.h // 2
     cropped = clip.crop(
@@ -41,6 +47,7 @@ def resize_and_crop_center(clip, target_width, target_height):
 
 
 def apply_random_effect(clip, width, height):
+    """Apply random effects such as fade, zoom, and slide."""
     effects = ["fade", "zoom", "slide_left", "slide_right", "slide_up", "slide_down", "none"]
     effect = random.choice(effects)
 
@@ -92,10 +99,9 @@ def create_video_randomized_media(media_files, total_duration, change_every, wor
             try:
                 if ext in [".jpg", ".png"]:
                     print(f"🖼️ Đang xử lý ảnh: {file}")
-                    # Đặt thời gian ảnh lâu hơn, ở đây tôi cho mỗi ảnh là 5 giây
                     img = ImageClip(file, duration=5)  # Chỉnh lại thời gian cho mỗi ảnh
                     valid_clip = resize_and_crop_center(img, width, height)
- 
+
                 elif ext in [".mp4", ".mov"] and is_valid_video(file):
                     print(f"🎞️ Đang xử lý video: {file}")
                     video = VideoFileClip(file)
@@ -123,13 +129,6 @@ def create_video_randomized_media(media_files, total_duration, change_every, wor
         print(f"✅ Xuất video hoàn tất: {output_file}")
     else:
         raise Exception("❌ Không có clip hợp lệ nào để tạo video.")
-
-
-
-def percent_to_db(percent):
-    """Chuyển % volume về decibel tương đối (dB giảm)."""
-    percent = max(1, min(percent, 100))  # tránh chia 0
-    return 40 * (1 - percent / 100)  # càng nhỏ càng giảm mạnh
 
 
 def burn_sub_and_audio(video_path, srt_path, voice_path, output_path,
@@ -228,3 +227,11 @@ def burn_sub_and_audio(video_path, srt_path, voice_path, output_path,
     if temp_combined_audio and os.path.exists(temp_combined_audio):
         os.remove(temp_combined_audio)
         print(f"🧹 Đã xoá file tạm: {temp_combined_audio}")
+
+
+def percent_to_db(percent):
+    """Chuyển % volume về decibel tương đối (dB giảm)."""
+    percent = max(1, min(percent, 100))  # tránh chia 0
+    return 40 * (1 - percent / 100)  # càng nhỏ càng giảm mạnh
+
+

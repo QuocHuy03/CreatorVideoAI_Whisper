@@ -1,6 +1,7 @@
 import os
 import time
 import requests
+import torch
 import concurrent.futures
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QPushButton, QFileDialog, QLabel,
@@ -85,8 +86,9 @@ class VideoGeneratorApp(QWidget):
 
 
     def setup_ui(self):
-        self.setWindowTitle("🎬 AI Video Generator v1.0 - @huyit32")
+        self.setWindowTitle("🎬 AI Video Generator v2.0 - @huyit32")
         self.setGeometry(200, 200, 1340, 900)
+        self.setFont(QFont("Roboto", 10))
 
         self.folder_path = ""
         self.text_list = []
@@ -142,6 +144,7 @@ class VideoGeneratorApp(QWidget):
         folder_layout = QHBoxLayout()
         self.select_folder_btn = QPushButton("Chọn thư mục")
         self.select_folder_btn.clicked.connect(self.select_folder)
+        self.select_folder_btn.setFixedWidth(150)
         folder_layout.addWidget(self.select_folder_btn)
         folder_group.setLayout(folder_layout)
 
@@ -168,6 +171,17 @@ class VideoGeneratorApp(QWidget):
         # --- Subtitle Options ---
         subtitle_group = QGroupBox("📜 Subtitle Options")
         subtitle_layout = QHBoxLayout()
+
+
+        # Subtitle Enable/Disable Toggle
+        subtitle_row1 = QHBoxLayout()
+        subtitle_row1.addWidget(QLabel("💬 Phụ đề:"))
+        self.subtitle_enabled_selector = QComboBox()
+        self.subtitle_enabled_selector.addItems(["Có phụ đề", "Không phụ đề"])
+        subtitle_row1.addWidget(self.subtitle_enabled_selector)
+        subtitle_layout.addLayout(subtitle_row1)
+
+
         subtitle_layout.addWidget(QLabel("Cỡ chữ:"))
         self.subtitle_font_size_selector = QComboBox()
         self.subtitle_font_size_selector.addItems([str(size) for size in range(10, 31)])
@@ -210,6 +224,33 @@ class VideoGeneratorApp(QWidget):
         subtitle_layout.addWidget(self.language_selector)
         subtitle_group.setLayout(subtitle_layout)
         left_column_layout.addWidget(subtitle_group)
+
+        # CPU/GPU and Model selection in one GroupBox on the same row
+        cpu_model_group = QGroupBox("⚙️ Cấu hình CPU/GPU + Model")
+        cpu_model_layout = QHBoxLayout()  # Horizontal layout for placing items in the same row
+
+        # CPU/GPU selection
+        cpu_layout = QHBoxLayout()
+        cpu_layout.addWidget(QLabel("💻 CPU/GPU:"))
+        self.cpu_selector = QComboBox()
+        self.cpu_selector.addItems(["CPU", "GPU"])
+        cpu_layout.addWidget(self.cpu_selector)
+
+        # Model selection
+        model_layout = QHBoxLayout()
+        model_layout.addWidget(QLabel("🧠 Model:"))
+        self.model_selector = QComboBox()
+        self.model_selector.addItems(["tiny", "base", "small", "medium", "large"])
+        model_layout.addWidget(self.model_selector)
+
+        # Combine both layouts into the main layout for CPU/GPU and Model selection
+        cpu_model_layout.addLayout(cpu_layout)
+        cpu_model_layout.addLayout(model_layout)
+
+        # Set the layout for the group box and add it to the main layout
+        cpu_model_group.setLayout(cpu_model_layout)
+        left_column_layout.addWidget(cpu_model_group)
+
 
         # --- Background Music ---
         music_group = QGroupBox("🎵 Background Music")
@@ -442,6 +483,17 @@ class VideoGeneratorApp(QWidget):
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_THREADS)
         futures = []
 
+        # Get selected settings for CPU/GPU, Model, and Subtitle Toggle
+        selected_cpu = self.cpu_selector.currentText()  # "CPU" or "GPU"
+        if selected_cpu == "GPU" and torch.cuda.is_available():
+            device = 0  # Use GPU if selected and available
+        else:
+            device = "cpu"  # Default to CPU
+
+        selected_model = self.model_selector.currentText()  # "tiny", "base", "small", "medium", "large"
+        subtitles_enabled = self.subtitle_enabled_selector.currentText() == "Có phụ đề"
+
+
         def update_progress_and_check(future):
             self.jobs_completed += 1
             if self.jobs_completed == self.total_jobs:
@@ -452,28 +504,28 @@ class VideoGeneratorApp(QWidget):
         for idx, text in enumerate(self.text_list):
             output_filename = os.path.join(self.output_folder, f"video_{idx+1}.mp4")
             self.add_table_row(idx, text)
-            future = executor.submit(self.run_video_job, text, self.folder_path, output_filename, api_key_list, idx)
+            future = executor.submit(self.run_video_job, text, self.folder_path, output_filename, api_key_list, idx, device, selected_model, subtitles_enabled)
             future.add_done_callback(update_progress_and_check)
 
 
 
-    def run_video_job(self, text, folder_path, output_path, api_key_list, index):
+    def run_video_job(self, text, folder_path, output_path, api_key_list, index, device, model_name, subtitles_enabled):
         def log(msg):
             self.safe_append_log(f"[Video #{index + 1}] {msg}")
 
         log("🔄 Bắt đầu xử lý")
 
-        audio_file = f"temp_audio_{index}.mp3"  # Tên file audio đã định nghĩa
+        audio_file = f"temp_audio_{index}.mp3"
         sub_file = f"temp_sub_{index}.srt"
         temp_video = f"temp_video_{index}.mp4"
 
-        voice_id = self.voice_selector.currentText()  # Get the selected voice
+        voice_id = self.voice_selector.currentText()
         if not voice_id:
             voice_id = "achird"  # Default voice in case no voice is selected
 
         try:
             log(f"🎤 Đang tạo giọng với Voice ID: {voice_id}")
-            
+
             # Cleanup temporary files before proceeding
             for f in [audio_file, sub_file, temp_video]:
                 try:
@@ -482,43 +534,48 @@ class VideoGeneratorApp(QWidget):
                         log(f"🧹 Đã xóa file tạm: {f}")
                 except Exception as cleanup_err:
                     log(f"⚠️ Không thể xoá file tạm {f}: {cleanup_err}")
-            
+
             # Generate audio with retry
-            audio_file = create_voice_with_retry(text, audio_file, api_key_list, voice_name=voice_id)  # Get the correct audio file path
+            audio_file = create_voice_with_retry(text, audio_file, api_key_list, voice_name=voice_id)
             log("📝 Tạo giọng và lưu file audio thành công")
 
-            # Get language code for transcription
             language_code = self.language_selector.currentData()
 
             if language_code:
                 log(f"🗣️ Ngôn ngữ chọn: {language_code}")
             else:
-                log("🗣️ Đang sử dụng chế độ Auto Detect (không gửi language_code)")
+                log("🗣️ Đang sử dụng chế độ Auto Detect")
 
             log("🧠 Đang dùng fast-whisper để tạo phụ đề...")
             trans_result = transcribe_audio(
-                    audio_path=audio_file,  # Use the correct audio file path here
-                    folder_path=self.output_folder,
-                    output_base=f"video_{index + 1}",
-                    language_code=language_code
-                )
+                audio_path=audio_file,
+                folder_path=self.output_folder,
+                output_base=f"video_{index + 1}",
+                language_code=language_code,
+                model_name=model_name,  # Use the selected model
+                device=device  # Use CPU/GPU
+            )
             sub_file = trans_result["srt_path"]
             karaoke_json = trans_result["karaoke_path"]
 
             log("✨ Đang tạo file karaoke .ass từ fast-whisper...")
             ass_file = os.path.join(self.output_folder, f"video_{index + 1}.ass")
-            position = self.subtitle_position_selector.currentText().lower()  # "dưới", "giữa", "trên"
-            color_hex = self.subtitle_color_selector.currentData() # color font
-            generate_karaoke_ass_from_srt_and_words(
-                sub_file,
-                karaoke_json,
-                ass_file,
-                font=self.font_selector.currentText(),
-                size=int(self.subtitle_font_size_selector.currentText()),
-                position=position,
-                color=color_hex
-            )
-            log(f"🎉 Đã tạo file phụ đề .ass: {ass_file}")
+            position = self.subtitle_position_selector.currentText().lower()
+            color_hex = self.subtitle_color_selector.currentData()
+
+            if subtitles_enabled:
+                generate_karaoke_ass_from_srt_and_words(
+                    sub_file,
+                    karaoke_json,
+                    ass_file,
+                    font=self.font_selector.currentText(),
+                    size=int(self.subtitle_font_size_selector.currentText()),
+                    position=position,
+                    color=color_hex
+                )
+                log(f"🎉 Đã tạo file phụ đề .ass: {ass_file}")
+            else:
+                ass_file = None  # No subtitles if disabled
 
             duration = AudioSegment.from_file(audio_file).duration_seconds
             log(f"⏳ Độ dài audio: {duration:.2f} giây")
@@ -589,3 +646,5 @@ class VideoGeneratorApp(QWidget):
             safe_remove_file(f, log_func=log)
         for f in [audio_file, sub_file, temp_video]:
             safe_remove_file(f, log_func=log)
+
+          

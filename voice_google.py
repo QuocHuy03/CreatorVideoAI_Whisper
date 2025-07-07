@@ -175,16 +175,16 @@ def create_voice_with_retry(text, output_file, api_key_list, voice_name="achird"
     raise Exception("❌ Tất cả các API Key đều thất bại trong việc tạo giọng!")
 
 
-def transcribe_audio(audio_path, folder_path, output_base="output", language_code=None):
+def transcribe_audio(audio_path, folder_path, output_base="output", language_code=None, model_name="small", device="cpu"):
     """Transcribe audio to text using fast-whisper and generate subtitle files."""
 
     output_dir = folder_path
     os.makedirs(output_dir, exist_ok=True)
-    model = WhisperModel("small", device="cpu")  # Có thể thay bằng "medium" nếu cần
+    model = WhisperModel(model_name, device=device)  # Use dynamic model size and device
 
     print(f"🧠 Transcribing audio file: {audio_path}")
     segments_gen, info = model.transcribe(audio_path, language=language_code, word_timestamps=True)
-    segments = list(segments_gen)  # Chuyển generator thành list
+    segments = list(segments_gen)  # Convert the generator to a list
 
     if not segments:
         print("❌ No transcriptions available.")
@@ -193,7 +193,7 @@ def transcribe_audio(audio_path, folder_path, output_base="output", language_cod
     srt_path = os.path.join(output_dir, f"{output_base}.srt")
     json_path = os.path.join(output_dir, f"{output_base}.json")
 
-    # Viết SRT file
+    # Write the SRT file
     with open(srt_path, "w", encoding="utf-8") as srt_file:
         for idx, segment in enumerate(segments, 1):
             start = segment.start
@@ -205,7 +205,7 @@ def transcribe_audio(audio_path, folder_path, output_base="output", language_cod
 
             srt_file.write(f"{idx}\n{start_time} --> {end_time}\n{text}\n\n")
 
-    # Viết JSON karaoke
+    # Write JSON karaoke
     words_data = []
     for segment in segments:
         if hasattr(segment, "words") and segment.words:
