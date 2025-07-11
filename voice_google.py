@@ -202,7 +202,7 @@ def create_voice_with_retry(text, output_file_pcm, api_key_list, voice_name="ach
         raise Exception("🛑 Không có key nào khả dụng để tạo voice.")
 
 
-def split_text_smart(segment, max_words=5):
+def split_text_smart(segment, max_words=6):
     """Tách đoạn thành nhiều phần nhỏ theo dấu câu và số từ."""
     text = segment.text.strip()
     # Ưu tiên tách theo dấu phẩy, chấm, hoặc xuống dòng
@@ -232,7 +232,7 @@ def split_text_smart(segment, max_words=5):
     return final_segments
 
 
-def split_text_and_timestamps(segment, max_words=5):
+def split_text_and_timestamps(segment, max_words=6):
     """Tách segment thành nhiều phần nhỏ theo dấu câu và max_words, tính thời gian chính xác."""
     parts = split_text_smart(segment, max_words)
     total_duration = segment.end - segment.start

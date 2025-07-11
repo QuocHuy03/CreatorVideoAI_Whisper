@@ -82,7 +82,6 @@ def create_video_randomized_media(media_files, total_duration, change_every, wor
     duration_per_segment = total_duration / num_segments
     retries = 5
 
-    # Kích thước theo chiều video
     width, height = (1080, 1920) if is_vertical else (1920, 1080)
 
     print(f"📐 Tạo video với chiều {'Dọc (9:16)' if is_vertical else 'Ngang (16:9)'} → kích thước: {width}x{height}")
@@ -99,14 +98,15 @@ def create_video_randomized_media(media_files, total_duration, change_every, wor
             try:
                 if ext in [".jpg", ".png"]:
                     print(f"🖼️ Đang xử lý ảnh: {file}")
-                    img = ImageClip(file, duration=5)  # Chỉnh lại thời gian cho mỗi ảnh
+                    img = ImageClip(file, duration=duration_per_segment)
                     valid_clip = resize_and_crop_center(img, width, height)
 
                 elif ext in [".mp4", ".mov"] and is_valid_video(file):
                     print(f"🎞️ Đang xử lý video: {file}")
                     video = VideoFileClip(file)
                     subclip = video.subclip(0, min(duration_per_segment, video.duration))
-                    subclip.filename = file  # để in log
+                    subclip.filename = file
+                    subclip = subclip.set_duration(duration_per_segment)  # đảm bảo đúng duration
                     valid_clip = resize_and_crop_center(subclip, width, height)
 
             except Exception as e:
@@ -114,17 +114,27 @@ def create_video_randomized_media(media_files, total_duration, change_every, wor
                 attempt += 1
 
         if valid_clip:
-            print(f"✅ Segment {seg+1}/{num_segments} đã sẵn sàng.\n")
-            clips.append(valid_clip)
+            valid_clip = valid_clip.set_duration(duration_per_segment)
             valid_clip, effect = apply_random_effect(valid_clip, width, height)
-            print(f"✨ Segment {seg+1}: hiệu ứng {effect}")
-
+            clips.append(valid_clip)
+            print(f"✅ Segment {seg+1}/{num_segments} đã sẵn sàng. Hiệu ứng: {effect}\n")
         else:
             print(f"❌ Segment {seg+1} thất bại sau {retries} lần thử.\n")
 
     if clips:
         print("🔄 Ghép tất cả clip thành video cuối...")
         final = concatenate_videoclips(clips, method="compose")
+
+        # Nếu video ngắn hơn tổng thời lượng → thêm đoạn lặp lại cuối cùng
+        current_duration = final.duration
+        if current_duration < total_duration:
+            pad_duration = total_duration - current_duration
+            print(f"⚠️ Video ngắn hơn âm thanh ({current_duration:.2f}s < {total_duration:.2f}s). Thêm padding...")
+            last_clip = clips[-1].fx(fadein, 0.3).fx(fadeout, 0.3).set_duration(pad_duration)
+            final = concatenate_videoclips([final, last_clip], method="compose")
+
+        # Đảm bảo thời lượng chính xác
+        final = final.set_duration(total_duration)
         final.write_videofile(output_file, fps=30, logger=None)
         print(f"✅ Xuất video hoàn tất: {output_file}")
     else:
