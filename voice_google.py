@@ -6,6 +6,10 @@ from faster_whisper import WhisperModel
 import base64
 import ffmpeg
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import re
+from pathlib import Path
 
 
 def get_proxy_list():
@@ -99,80 +103,160 @@ def fetch_api_keys():
         return []
 
 
-def create_voice(text, output_file_pcm, api_key, voice_name="achird"):
-    """Generate voice audio using the Google Gemini TTS API."""
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent"
-    
-    data = {
-        "contents": [{"parts": [{"text": text}]}],
-        "generationConfig": {
-            "responseModalities": ["AUDIO"],
-            "speechConfig": {
-                "voiceConfig": {
-                    "prebuiltVoiceConfig": {
-                        "voiceName": voice_name
+def create_voice_with_retry(text, output_file_pcm, api_key_list, voice_name="achird", max_workers=5):
+    """
+    ✅ Tạo voice sử dụng nhiều key và proxy cùng lúc (song song)
+    ✅ Dừng lại khi 1 key thành công
+    """
+    proxy_list = get_proxy_list()
+    if not proxy_list:
+        proxy_list = [None]
+
+    success_event = threading.Event()
+    result_holder = {}
+    lock = threading.Lock()
+
+    def task(api_key, proxy_str, thread_id):
+        if success_event.is_set():
+            return
+
+        try:
+            proxy_dict = format_proxy(proxy_str) if proxy_str else None
+            print(f"[{thread_id}] 🧪 Thử key: {api_key[:10]}... với proxy: {proxy_str}")
+
+            url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent"
+            data = {
+                "contents": [{"parts": [{"text": text}]}],
+                "generationConfig": {
+                    "responseModalities": ["AUDIO"],
+                    "speechConfig": {
+                        "voiceConfig": {
+                            "prebuiltVoiceConfig": {
+                                "voiceName": voice_name
+                            }
+                        }
                     }
-                }
+                },
+                "model": "gemini-2.5-flash-preview-tts",
             }
-        },
-        "model": "gemini-2.5-flash-preview-tts",
-    }
 
-    response = requests.post(
-        url,
-        headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
-        json=data
-    )
+            response = requests.post(
+                url,
+                headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+                json=data,
+                proxies=proxy_dict,
+                timeout=60
+            )
 
-    if response.status_code == 200:
-        response_data = response.json()
-        audio_data = response_data['candidates'][0]['content']['parts'][0]['inlineData']['data']
-        decoded_audio = base64.b64decode(audio_data)
+            if response.status_code != 200:
+                print(f"❌ [{thread_id}] Lỗi API: {response.status_code}")
+                return
 
-        # Save the PCM file
-        with open(output_file_pcm, "wb") as audio_file:
-            audio_file.write(decoded_audio)
+            if success_event.is_set():
+                return
 
-        # Create MP3 file name
-        base_name, _ = os.path.splitext(output_file_pcm)
-        timestamp = time.strftime("%Y%m%d%H%M%S")
-        mp3_file = f"{base_name}_{timestamp}.mp3"
+            success_event.set()
 
-        # Ensure no file overwrite
-        while os.path.exists(mp3_file):
-            unique_suffix = random.randint(1000, 9999)
-            mp3_file = f"{base_name}_{timestamp}_{unique_suffix}.mp3"
+            audio_data = response.json()['candidates'][0]['content']['parts'][0]['inlineData']['data']
+            decoded_audio = base64.b64decode(audio_data)
 
-        # Convert PCM to MP3
-        ffmpeg.input(output_file_pcm, f='s16le', ar='24000', ac='1') \
-            .output(mp3_file, **{'y': None}) \
-            .run(overwrite_output=True)
+            unique_id = random.randint(1000, 9999)
+            temp_pcm = output_file_pcm.replace(".pcm", f"_{unique_id}.pcm")
+            with open(temp_pcm, "wb") as f:
+                f.write(decoded_audio)
 
-        # Delete the PCM file after conversion
-        try:
-            os.remove(output_file_pcm)
-            print(f"🧹 Đã xóa file PCM tạm: {output_file_pcm}")
+            base_name, _ = os.path.splitext(temp_pcm)
+            timestamp = time.strftime("%Y%m%d%H%M%S")
+            mp3_file = f"{base_name}_{timestamp}.mp3"
+
+            ffmpeg.input(temp_pcm, f='s16le', ar='24000', ac='1') \
+                .output(mp3_file, **{'y': None}) \
+                .run(overwrite_output=True, quiet=True)
+
+            os.remove(temp_pcm)
+            print(f"🧹 Đã xóa file PCM tạm: {temp_pcm}")
+            print(f"✅ Voice generated successfully. Saved as {mp3_file}")
+
+            with lock:
+                result_holder["result"] = mp3_file
+
         except Exception as e:
-            print(f"⚠️ Không thể xóa file PCM {output_file_pcm}: {e}")
+            print(f"❌ [{thread_id}] Key {api_key[:10]} lỗi: {e}")
 
-        print(f"✅ Voice generated successfully. Saved as {mp3_file}")
-        return mp3_file
+    # Start thread pool
+    tasks = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        thread_id = 0
+        for proxy_str in proxy_list:
+            for api_key in api_key_list:
+                thread_id += 1
+                tasks.append(executor.submit(task, api_key, proxy_str, thread_id))
+
+        for future in as_completed(tasks):
+            if success_event.is_set():
+                break
+
+    if "result" in result_holder:
+        return result_holder["result"]
     else:
-        print(f"❌ Failed to generate voice: {response.status_code} - {response.text}")
-        raise Exception(f"❌ Failed to generate voice. Status Code: {response.status_code}")
+        raise Exception("🛑 Không có key nào khả dụng để tạo voice.")
 
 
-def create_voice_with_retry(text, output_file, api_key_list, voice_name="achird"):
-    """Attempt to generate voice using a list of API keys, retrying with a new key if one fails."""
-    for api_key in api_key_list:
-        try:
-            print(f"🎤 Đang thử với API Key: {api_key}")
-            audio_path = create_voice(text, output_file, api_key, voice_name)
-            return audio_path
-        except Exception as e:
-            print(f"❌ Lỗi khi tạo giọng với API Key {api_key}: {e}")
-            continue
-    raise Exception("❌ Tất cả các API Key đều thất bại trong việc tạo giọng!")
+def split_text_smart(segment, max_words=5):
+    """Tách đoạn thành nhiều phần nhỏ theo dấu câu và số từ."""
+    text = segment.text.strip()
+    # Ưu tiên tách theo dấu phẩy, chấm, hoặc xuống dòng
+    split_points = re.split(r'([,.!?;:])', text)
+    
+    # Gộp lại thành các câu đầy đủ
+    phrases = []
+    phrase = ""
+    for part in split_points:
+        phrase += part
+        if part in [",", ".", "!", "?", ";", ":"]:
+            phrases.append(phrase.strip())
+            phrase = ""
+    if phrase:
+        phrases.append(phrase.strip())
+
+    # Nếu các câu nhỏ > max_words, tiếp tục tách theo từ
+    final_segments = []
+    for phrase in phrases:
+        words = phrase.split()
+        if len(words) <= max_words:
+            final_segments.append(phrase)
+        else:
+            # Tách tiếp theo số từ
+            for i in range(0, len(words), max_words):
+                final_segments.append(" ".join(words[i:i + max_words]))
+    return final_segments
+
+
+def split_text_and_timestamps(segment, max_words=5):
+    """Tách segment thành nhiều phần nhỏ theo dấu câu và max_words, tính thời gian chính xác."""
+    parts = split_text_smart(segment, max_words)
+    total_duration = segment.end - segment.start
+
+    # Tổng số từ thực tế sau khi chia
+    total_words = sum(len(part.split()) for part in parts)
+    if total_words == 0:
+        return [(segment.start, segment.end, segment.text.strip())]
+
+    # Thời gian trên mỗi từ
+    duration_per_word = total_duration / total_words
+
+    # Tính thời gian theo số từ của từng đoạn
+    timestamps = []
+    current_start = segment.start
+
+    for part in parts:
+        word_count = len(part.split())
+        part_duration = duration_per_word * word_count
+        current_end = current_start + part_duration
+        timestamps.append((round(current_start, 3), round(current_end, 3), part))
+        current_start = current_end
+
+    return timestamps
 
 
 def transcribe_audio(audio_path, folder_path, output_base="output", language_code=None, model_name="small", device="cpu"):
@@ -195,17 +279,16 @@ def transcribe_audio(audio_path, folder_path, output_base="output", language_cod
 
     # Write the SRT file
     with open(srt_path, "w", encoding="utf-8") as srt_file:
-        for idx, segment in enumerate(segments, 1):
-            start = segment.start
-            end = segment.end
-            text = segment.text
+        idx = 1
+        for segment in segments:
+            split_parts = split_text_and_timestamps(segment, max_words=5)
+            for start, end, text in split_parts:
+                srt_file.write(f"{idx}\n")
+                srt_file.write(f"{format_srt_time(start)} --> {format_srt_time(end)}\n")
+                srt_file.write(f"{text}\n\n")
+                idx += 1
 
-            start_time = format_srt_time(start)
-            end_time = format_srt_time(end)
-
-            srt_file.write(f"{idx}\n{start_time} --> {end_time}\n{text}\n\n")
-
-    # Write JSON karaoke
+    # Save karaoke JSON
     words_data = []
     for segment in segments:
         if hasattr(segment, "words") and segment.words:
@@ -217,12 +300,14 @@ def transcribe_audio(audio_path, folder_path, output_base="output", language_cod
                     "type": "word"
                 })
         else:
-            words_data.append({
-                "start": segment.start,
-                "end": segment.end,
-                "text": segment.text,
-                "type": "segment"
-            })
+            split_parts = split_text_and_timestamps(segment, max_words=5)
+            for start, end, text in split_parts:
+                words_data.append({
+                    "start": start,
+                    "end": end,
+                    "text": text,
+                    "type": "segment"
+                })
 
     with open(json_path, "w", encoding="utf-8") as json_file:
         json.dump(words_data, json_file, ensure_ascii=False, indent=2)
@@ -245,18 +330,33 @@ def format_srt_time(seconds):
 # === Subtitle ===
 
 def hex_to_ass_color(hex_color: str) -> str:
-    """Convert hex color (e.g., 'FF69B4') to ASS color (&H00BBGGRR)"""
+    """Chuyển mã hex RGB (ví dụ 'FF69B4') sang định dạng màu ASS (&H00BBGGRR)."""
     hex_color = hex_color.strip("#")
     if len(hex_color) != 6:
-        return "&H00FFFFFF"  # fallback to white
+        return "&H00FFFFFF"  # fallback trắng
     r = hex_color[0:2]
     g = hex_color[2:4]
     b = hex_color[4:6]
-    return f"&H00{b}{g}{r}"  # ASS uses BGR order
+    return f"&H00{b}{g}{r}"  # BGR cho ASS
 
 
-def generate_karaoke_ass_from_srt_and_words(srt_path, karaoke_json_path, output_ass_path,
-                                             font="Arial", size=14, position="dưới", color="FFFFFF"):
+def sanitize_path(path: str) -> str:
+    filename = Path(path).name
+    safe_name = re.sub(r'[,:\"\'<>|?* ]+', '_', filename)
+    return str(Path(path).with_name(safe_name))
+
+
+def generate_karaoke_ass_from_srt_and_words(
+    srt_path,
+    karaoke_json_path,
+    output_ass_path,
+    font="Arial",
+    size=14,
+    position="dưới",
+    base_color="&H00FFFFFF",
+    highlight_color="&H00FFFF00",
+    mode="Phụ đề thường (toàn câu)"
+):
     def convert_srt_time(srt_time):
         h, m, s = srt_time.split(":")
         s, ms = s.split(",")
@@ -266,44 +366,136 @@ def generate_karaoke_ass_from_srt_and_words(srt_path, karaoke_json_path, output_
         h = int(seconds // 3600)
         m = int((seconds % 3600) // 60)
         s = int(seconds % 60)
-        cs = int(round((seconds % 1) * 100))
+        cs = int((seconds % 1) * 100)
         return f"{h}:{m:02}:{s:02}.{cs:02}"
-    ass_color = hex_to_ass_color(color)
-    alignment_map = {
-        "trên": 8,    # top-center
-        "giữa": 5,    # middle-center
-        "dưới": 2     # bottom-center
-    }
-    alignment = alignment_map.get(position.lower(), 2)  # fallback: dưới
 
     with open(karaoke_json_path, "r", encoding="utf-8") as f:
         word_items = [w for w in json.load(f) if w.get("type") == "word"]
+
+    def parse_srt(file_path):
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        blocks = re.split(r'\n\s*\n', content.strip())
+        segments = []
+        for block in blocks:
+            lines = block.strip().split('\n')
+            if len(lines) >= 3:
+                time_line = lines[1]
+                text = ' '.join(lines[2:])
+                match = re.match(r'(\d{2}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2},\d{3})', time_line)
+                if match:
+                    start = convert_srt_time(match.group(1))
+                    end = convert_srt_time(match.group(2))
+                    segments.append({"start": start, "end": end, "text": text})
+        return segments
+
+    alignment_map = {
+        "trên": 8,
+        "giữa": 5,
+        "dưới": 2
+    }
+    alignment = alignment_map.get(position.lower(), 2)
+
+    output_ass_path = sanitize_path(output_ass_path)
+    output_dir = os.path.dirname(output_ass_path)
+    os.makedirs(output_dir, exist_ok=True)
+
+    segments = parse_srt(srt_path)
 
     with open(output_ass_path, "w", encoding="utf-8") as f:
         # Header
         f.write("[Script Info]\nTitle: Karaoke Sub\nScriptType: v4.00+\n\n")
         f.write("[V4+ Styles]\n")
-        f.write("Format: Name, Fontname, Fontsize, PrimaryColour, Bold, Italic, Underline, StrikeOut, "
+        f.write("Format: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, Bold, Italic, Underline, StrikeOut, "
                 "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n")
-        f.write(f"Style: Highlight,{font},{size},{ass_color},1,0,0,0,100,100,0,0,1,1,0,{alignment},10,10,9,1\n\n")
+        outline_color = "&H00303030"
+        f.write(f"Style: Base,{font},{size},{base_color},{outline_color},0,0,0,0,100,100,0,0,1,1,0,{alignment},10,10,20,1\n")
+        f.write(f"Style: Highlight,{font},{size},{highlight_color},{outline_color},0,0,0,0,100,100,0,0,1,1,0,{alignment},10,10,20,1\n\n")
 
         f.write("[Events]\n")
         f.write("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n")
 
-        for word in word_items:
-            start = word.get("start")
-            end = word.get("end")
-            text = word.get("text") or word.get("word") or ""
-            text = text.replace("{", "").replace("}", "")
+        word_idx = 0
+        for seg in segments:
+            seg_start = seg["start"]
+            seg_end = seg["end"]
+            ass_start = format_ass_time(seg_start)
+            ass_end = format_ass_time(seg_end)
+            full_text = seg["text"]
 
-            if not text.strip():
-                continue
+            # Lấy các từ thuộc đoạn
+            line_words = []
+            temp_idx = word_idx
+            while temp_idx < len(word_items):
+                w = word_items[temp_idx]
+                if w["end"] <= seg_start:
+                    temp_idx += 1
+                    continue
+                if w["start"] >= seg_end:
+                    break
+                line_words.append({
+                    "start": w["start"],
+                    "end": w["end"],
+                    "text": w["text"].replace("{", "").replace("}", ""),
+                    "dur": int((w["end"] - w["start"]) * 100)
+                })
+                temp_idx += 1
 
-            start_ts = format_ass_time(start)
-            end_ts = format_ass_time(end)
-            scale_up = int(size * 1.2)
+            # Ghi phụ đề theo mode
+            if mode == "Phụ đề thường (toàn câu)":
+                f.write(f"Dialogue: -1,{ass_start},{ass_end},Base,,0,0,0,,{{\\1a&H80&}}{full_text}\n")
+                f.write(f"Dialogue: 0,{ass_start},{ass_end},Base,,0,0,0,,{full_text}\n")
 
-            effect = f"{{\\fad(100,100)\\fs{size}\\t(0,200,\\fs{scale_up})}}{text}"
-            f.write(f"Dialogue: 0,{start_ts},{end_ts},Highlight,,0,0,0,,{effect}\n")
+            elif mode == "Highlight từng từ (karaoke)":
+                ass_line = "".join([f"{{\\k{w['dur']}}}{w['text']}" for w in line_words])
+                f.write(f"Dialogue: 0,{ass_start},{ass_end},Highlight,,0,0,0,,{ass_line}\n")
 
-    print(f"✅ Đã tạo file karaoke .ass với hiệu ứng từng chữ: {output_ass_path}")
+            elif mode == "Highlight tuần tự (màu chữ)":
+                for i, _ in enumerate(line_words):
+                    ass_line = "".join([
+                        f"{{\\1c{highlight_color}}}{w['text']}" if j == i else f"{{\\1c{base_color}}}{w['text']}"
+                        for j, w in enumerate(line_words)
+                    ])
+                    start = format_ass_time(line_words[i]["start"])
+                    end = format_ass_time(line_words[i]["end"])
+                    f.write(f"Dialogue: 0,{start},{end},Highlight,,0,0,0,,{ass_line.strip()}\n")
+
+            elif mode == "Highlight tuần tự (zoom chữ)":
+                for i, _ in enumerate(line_words):
+                    ass_line = "".join([
+                        (
+                            f"{{\\1c{highlight_color}\\fs{size}"
+                            f"\\t(0,100,\\fs{int(size * 1.3)})"
+                            f"\\t(100,300,\\fs{size})}}{w['text']}"
+                            if j == i else f"{{\\1c{base_color}\\fs{size}}}{w['text']}"
+                        )
+                        for j, w in enumerate(line_words)
+                    ])
+                    start = format_ass_time(line_words[i]["start"])
+                    end = format_ass_time(line_words[i]["end"])
+                    f.write(f"Dialogue: 0,{start},{end},Highlight,,0,0,0,,{ass_line.strip()}\n")
+
+            elif mode == "Highlight tuần tự (ô vuông)":
+                for i, _ in enumerate(line_words):
+                    ass_line = "".join([
+                        (
+                            f"{{\\1c{highlight_color}\\bord2\\shad0\\3c&H000000&}}{w['text']}"
+                            if j == i else f"{{\\1c{base_color}\\bord0\\shad0}}{w['text']}"
+                        )
+                        for j, w in enumerate(line_words)
+                    ])
+                    start = format_ass_time(line_words[i]["start"])
+                    end = format_ass_time(line_words[i]["end"])
+                    f.write(f"Dialogue: 0,{start},{end},Highlight,,0,0,0,,{ass_line.strip()}\n")
+
+            elif mode == "Hiệu ứng từng chữ một (chuyên sâu)":
+                for w in line_words:
+                    w_start = format_ass_time(w["start"])
+                    w_end = format_ass_time(w["end"])
+                    scale_up = int(size * 1.2)
+                    effect = f"{{\\fad(100,100)\\fs{size}\\t(0,200,\\fs{scale_up})}}{w['text']}"
+                    f.write(f"Dialogue: 0,{w_start},{w_end},Highlight,,0,0,0,,{effect}\n")
+
+            word_idx = temp_idx
+
+    print(f"✅ Đã tạo phụ đề .ass ({mode}): {output_ass_path}")

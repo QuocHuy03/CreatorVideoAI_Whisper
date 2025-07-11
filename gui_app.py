@@ -54,7 +54,8 @@ class VideoGeneratorApp(QWidget):
             "ratio": self.ratio_selector.currentText(),
             "font": self.font_selector.currentText(),
             "font_size": self.subtitle_font_size_selector.currentText(),
-            "font_color": self.subtitle_color_selector.currentData(),
+            "base_color": self.subtitle_base_color_selector.currentData(),
+            "highlight_color": self.subtitle_highlight_color_selector.currentData(),
             "music": self.music_selector.currentText(),
             "volume": self.volume_selector.currentText()
         }
@@ -75,8 +76,11 @@ class VideoGeneratorApp(QWidget):
             self.ratio_selector.setCurrentText(preset.get("ratio", "Dọc (9:16)"))
             self.font_selector.setCurrentText(preset.get("font", "Playbill"))
             self.subtitle_font_size_selector.setCurrentText(preset.get("font_size", "15"))
-            self.subtitle_color_selector.setCurrentIndex(
-                self.subtitle_color_selector.findData(preset.get("font_color", "00FFFF"))
+            self.subtitle_base_color_selector.setCurrentIndex(
+                self.subtitle_base_color_selector.findData(preset.get("base_color", "FFFFFF"))
+            )
+            self.subtitle_highlight_color_selector.setCurrentIndex(
+                self.subtitle_highlight_color_selector.findData(preset.get("highlight_color", "FFFF00"))
             )
             self.music_selector.setCurrentText(preset.get("music", "Không có nhạc nền"))
             self.volume_selector.setCurrentText(preset.get("volume", "30%"))
@@ -170,58 +174,90 @@ class VideoGeneratorApp(QWidget):
 
         # --- Subtitle Options ---
         subtitle_group = QGroupBox("📜 Subtitle Options")
-        subtitle_layout = QHBoxLayout()
+        subtitle_layout = QVBoxLayout()
 
 
-        # Subtitle Enable/Disable Toggle
+
+        # Row 1: Subtitle Toggle + Mode
         subtitle_row1 = QHBoxLayout()
         subtitle_row1.addWidget(QLabel("💬 Phụ đề:"))
         self.subtitle_enabled_selector = QComboBox()
         self.subtitle_enabled_selector.addItems(["Có phụ đề", "Không phụ đề"])
         subtitle_row1.addWidget(self.subtitle_enabled_selector)
+
+        subtitle_row1.addSpacing(20)
+        subtitle_row1.addWidget(QLabel("📺 Kiểu Phụ Đề:"))
+        self.subtitle_mode = QComboBox()
+        self.subtitle_mode.addItems([
+            "Phụ đề thường (toàn câu)",
+            "Highlight tuần tự (màu chữ)",
+            "Highlight tuần tự (ô vuông)",
+            "Highlight tuần tự (zoom chữ)",
+            "Hiệu ứng từng chữ một (chuyên sâu)",
+        ])
+        subtitle_row1.addWidget(self.subtitle_mode)
+
         subtitle_layout.addLayout(subtitle_row1)
 
 
-        subtitle_layout.addWidget(QLabel("Cỡ chữ:"))
+
+
+        # Row 2: Font size + Base color + Highlight color
+        subtitle_row2 = QHBoxLayout()
+        subtitle_row2.addWidget(QLabel("Cỡ chữ:"))
         self.subtitle_font_size_selector = QComboBox()
         self.subtitle_font_size_selector.addItems([str(size) for size in range(10, 31)])
         self.subtitle_font_size_selector.setCurrentText("10")
-        subtitle_layout.addWidget(self.subtitle_font_size_selector)
+        subtitle_row2.addWidget(self.subtitle_font_size_selector)
 
-        subtitle_layout.addWidget(QLabel("Màu chữ:"))
-        self.subtitle_color_selector = QComboBox()
-        self.subtitle_color_selector.addItem("Trắng", "FFFFFF")
-        self.subtitle_color_selector.addItem("Đen", "000000")
-        self.subtitle_color_selector.addItem("Xanh Dương", "00FFFF")
-        self.subtitle_color_selector.addItem("Đỏ", "FF0000")
-        self.subtitle_color_selector.addItem("Vàng", "FFFF00")
-        self.subtitle_color_selector.addItem("Xanh Lá", "00FF00")
-        self.subtitle_color_selector.addItem("Tím", "800080")
-        self.subtitle_color_selector.addItem("Cam", "FFA500")
-        self.subtitle_color_selector.addItem("Hồng", "FF69B4")
-        self.subtitle_color_selector.addItem("Xám", "808080")
-        self.subtitle_color_selector.addItem("Nâu", "8B4513")
-        self.subtitle_color_selector.addItem("Xanh", "556B2F")
-        self.subtitle_color_selector.addItem("Vàng", "FFFACD")
-        self.subtitle_color_selector.addItem("Cam", "FF4500")
-        self.subtitle_color_selector.addItem("Tím Pastel", "D8BFD8")
-        self.subtitle_color_selector.addItem("Hồng", "FFC0CB")
-        self.subtitle_color_selector.setCurrentText("Xanh Dương")
-        subtitle_layout.addWidget(self.subtitle_color_selector)
+        subtitle_row2.addSpacing(20)
+        subtitle_row2.addWidget(QLabel("🎨 Base Color:"))
+        self.subtitle_base_color_selector = QComboBox()
+        self.subtitle_base_color_selector.addItem("Trắng", "FFFFFF")
+        self.subtitle_base_color_selector.addItem("Đen", "000000")
+        self.subtitle_base_color_selector.addItem("Xanh Dương", "00FFFF")
+        self.subtitle_base_color_selector.addItem("Đỏ", "FF0000")
+        self.subtitle_base_color_selector.addItem("Vàng", "FFFF00")
+        self.subtitle_base_color_selector.addItem("Xanh Lá", "00FF00")
+        self.subtitle_base_color_selector.addItem("Tím", "800080")
+        self.subtitle_base_color_selector.addItem("Hồng", "FF69B4")
+        self.subtitle_base_color_selector.setCurrentText("Trắng")
+        subtitle_row2.addWidget(self.subtitle_base_color_selector)
 
-        subtitle_layout.addWidget(QLabel("Vị trí phụ đề:"))
+        subtitle_row2.addSpacing(20)
+        subtitle_row2.addWidget(QLabel("✨ Highlight Color:"))
+        self.subtitle_highlight_color_selector = QComboBox()
+        self.subtitle_highlight_color_selector.addItem("Vàng", "FFFF00")
+        self.subtitle_highlight_color_selector.addItem("Xanh Dương", "00FFFF")
+        self.subtitle_highlight_color_selector.addItem("Đỏ", "FF0000")
+        self.subtitle_highlight_color_selector.addItem("Trắng", "FFFFFF")
+        self.subtitle_highlight_color_selector.addItem("Hồng", "FF69B4")
+        self.subtitle_highlight_color_selector.setCurrentText("Vàng")
+        subtitle_row2.addWidget(self.subtitle_highlight_color_selector)
+
+        subtitle_layout.addLayout(subtitle_row2)
+
+
+
+        # Row 3: Subtitle position + Language
+        subtitle_row3 = QHBoxLayout()
+        subtitle_row3.addWidget(QLabel("Vị trí phụ đề:"))
         self.subtitle_position_selector = QComboBox()
         self.subtitle_position_selector.addItems(["Dưới", "Giữa", "Trên"])
-        subtitle_layout.addWidget(self.subtitle_position_selector)
+        subtitle_row3.addWidget(self.subtitle_position_selector)
 
-        subtitle_layout.addWidget(QLabel("Ngôn ngữ:"))
+        subtitle_row3.addSpacing(20)
+        subtitle_row3.addWidget(QLabel("Ngôn ngữ:"))
         self.language_selector = QComboBox()
         self.languages = fetch_languages()
         self.language_selector.addItem("🔍 Auto Detect", None)
         if self.languages:
             for lang in self.languages:
                 self.language_selector.addItem(lang["name"], lang["code"])
-        subtitle_layout.addWidget(self.language_selector)
+        subtitle_row3.addWidget(self.language_selector)
+
+        subtitle_layout.addLayout(subtitle_row3)
+
         subtitle_group.setLayout(subtitle_layout)
         left_column_layout.addWidget(subtitle_group)
 
@@ -561,17 +597,25 @@ class VideoGeneratorApp(QWidget):
             log("✨ Đang tạo file karaoke .ass từ fast-whisper...")
             ass_file = os.path.join(self.output_folder, f"video_{index + 1}.ass")
             position = self.subtitle_position_selector.currentText().lower()
-            color_hex = self.subtitle_color_selector.currentData()
+            subtitle_mode = self.subtitle_mode.currentText()
+            base_hex = self.subtitle_base_color_selector.currentData()
+            highlight_hex = self.subtitle_highlight_color_selector.currentData()
+            font_name = self.font_selector.currentText()
+            font_size = self.subtitle_font_size_selector.currentText()
+
+            background_music = self.music_selector.currentText()
 
             if subtitles_enabled:
                 generate_karaoke_ass_from_srt_and_words(
                     sub_file,
                     karaoke_json,
                     ass_file,
-                    font=self.font_selector.currentText(),
-                    size=int(self.subtitle_font_size_selector.currentText()),
+                    font=font_name,
+                    size=int(font_size),
                     position=position,
-                    color=color_hex
+                    base_color="&H00" + base_hex,
+                    highlight_color="&H00" + highlight_hex,
+                    mode=subtitle_mode
                 )
                 log(f"🎉 Đã tạo file phụ đề .ass: {ass_file}")
             else:
@@ -601,11 +645,7 @@ class VideoGeneratorApp(QWidget):
             )
             log("🎞️ Tạo video nền hoàn tất")
 
-            font_name = self.font_selector.currentText()
-            font_size = self.subtitle_font_size_selector.currentText()
-            font_color_hex = self.subtitle_color_selector.currentData() or "00FFFF"
-
-            background_music = self.music_selector.currentText()
+          
             music_path = os.path.join("background_music", background_music)
             if not os.path.exists(music_path) or background_music == "Không có nhạc nền":
                 music_path = None
@@ -628,7 +668,7 @@ class VideoGeneratorApp(QWidget):
                 output_path=output_path,
                 font_name=font_name,
                 font_size=font_size,
-                font_color=font_color_hex,
+                font_color="&H00" + base_hex,
                 bg_music_path=music_path,
                 bg_music_volume=music_volume
             )

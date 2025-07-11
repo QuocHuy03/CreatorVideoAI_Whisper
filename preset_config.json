@@ -2,7 +2,8 @@
   "ratio": "Dọc (9:16)",
   "font": "Comic Sans MS",
   "font_size": "10",
-  "font_color": "FFFFFF",
+  "base_color": "FFFFFF",
+  "highlight_color": "00FFFF",
   "music": "Cybernetic-Dreams-chosic.com_.mp3",
-  "volume": "10%"
+  "volume": "20%"
 }

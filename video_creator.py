@@ -202,8 +202,10 @@ def burn_sub_and_audio(video_path, srt_path, voice_path, output_path,
                     vf=subtitle_filter,
                     vcodec="libx264",
                     acodec="aac",
-                    preset="ultrafast",
+                    preset="slow",
                     pix_fmt="yuv420p",
+                    t=voice_duration,
+                    video_bitrate="5000k"
                 )
                 .overwrite_output()
                 .run()
