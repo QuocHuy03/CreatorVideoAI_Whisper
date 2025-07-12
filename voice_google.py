@@ -202,6 +202,25 @@ def create_voice_with_retry(text, output_file_pcm, api_key_list, voice_name="ach
         raise Exception("🛑 Không có key nào khả dụng để tạo voice.")
 
 
+# transcribe audio
+
+def adjust_srt_time(segments, padding_time=0.5):
+    """Điều chỉnh thời gian kết thúc và bắt đầu để tránh trùng lặp trong subtitle và đồng bộ với JSON."""
+    adjusted_segments = []
+    prev_end = 0
+
+    for segment in segments:
+        start, end, text, word_data = segment
+        # Nếu thời gian bắt đầu trùng với thời gian kết thúc của dòng trước đó, điều chỉnh
+        if start < prev_end:
+            start = prev_end + padding_time  # Tăng thời gian bắt đầu của segment để tránh trùng
+        adjusted_segments.append((start, end, text, word_data))
+        prev_end = end  # Cập nhật thời gian kết thúc của segment hiện tại
+
+    return adjusted_segments
+
+
+
 def split_text_smart(segment, max_words=6):
     """Tách đoạn thành nhiều phần nhỏ theo dấu câu và số từ."""
     text = segment.text.strip()
@@ -232,6 +251,7 @@ def split_text_smart(segment, max_words=6):
     return final_segments
 
 
+
 def split_text_and_timestamps(segment, max_words=6):
     """Tách segment thành nhiều phần nhỏ theo dấu câu và max_words, tính thời gian chính xác."""
     parts = split_text_smart(segment, max_words)
@@ -240,7 +260,7 @@ def split_text_and_timestamps(segment, max_words=6):
     # Tổng số từ thực tế sau khi chia
     total_words = sum(len(part.split()) for part in parts)
     if total_words == 0:
-        return [(segment.start, segment.end, segment.text.strip())]
+        return [(segment.start, segment.end, segment.text.strip(), [])]
 
     # Thời gian trên mỗi từ
     duration_per_word = total_duration / total_words
@@ -248,15 +268,26 @@ def split_text_and_timestamps(segment, max_words=6):
     # Tính thời gian theo số từ của từng đoạn
     timestamps = []
     current_start = segment.start
+    word_data = []  # Để lưu lại dữ liệu từ cho karaoke
 
     for part in parts:
         word_count = len(part.split())
         part_duration = duration_per_word * word_count
         current_end = current_start + part_duration
         timestamps.append((round(current_start, 3), round(current_end, 3), part))
+
+        # Thêm dữ liệu cho karaoke (JSON)
+        word_data.append({
+            "start": current_start,
+            "end": current_end,
+            "text": part
+        })
+
         current_start = current_end
 
-    return timestamps
+    # Điều chỉnh thời gian để tránh trùng lặp và đồng bộ với JSON
+    return adjust_srt_time([(start, end, text, word_data) for start, end, text in timestamps])
+
 
 
 def transcribe_audio(audio_path, folder_path, output_base="output", language_code=None, model_name="small", device="cpu"):
@@ -282,7 +313,7 @@ def transcribe_audio(audio_path, folder_path, output_base="output", language_cod
         idx = 1
         for segment in segments:
             split_parts = split_text_and_timestamps(segment, max_words=5)
-            for start, end, text in split_parts:
+            for start, end, text, word_data in split_parts:
                 srt_file.write(f"{idx}\n")
                 srt_file.write(f"{format_srt_time(start)} --> {format_srt_time(end)}\n")
                 srt_file.write(f"{text}\n\n")
@@ -301,13 +332,8 @@ def transcribe_audio(audio_path, folder_path, output_base="output", language_cod
                 })
         else:
             split_parts = split_text_and_timestamps(segment, max_words=5)
-            for start, end, text in split_parts:
-                words_data.append({
-                    "start": start,
-                    "end": end,
-                    "text": text,
-                    "type": "segment"
-                })
+            for start, end, text, word_data in split_parts:
+                words_data.extend(word_data)  # Thêm dữ liệu từ cho karaoke
 
     with open(json_path, "w", encoding="utf-8") as json_file:
         json.dump(words_data, json_file, ensure_ascii=False, indent=2)
@@ -350,7 +376,7 @@ def generate_karaoke_ass_from_srt_and_words(
     srt_path,
     karaoke_json_path,
     output_ass_path,
-    font="Arial",
+    font="Roboto",
     size=14,
     position="dưới",
     base_color="&H00FFFFFF",
@@ -496,6 +522,6 @@ def generate_karaoke_ass_from_srt_and_words(
                     effect = f"{{\\fad(100,100)\\fs{size}\\t(0,200,\\fs{scale_up})}}{w['text']}"
                     f.write(f"Dialogue: 0,{w_start},{w_end},Highlight,,0,0,0,,{effect}\n")
 
-            word_idx = temp_idx
+    word_idx = temp_idx
 
     print(f"✅ Đã tạo phụ đề .ass ({mode}): {output_ass_path}")

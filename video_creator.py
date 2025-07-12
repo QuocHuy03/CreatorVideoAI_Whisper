@@ -1,14 +1,13 @@
 import os
 import random
 import hashlib
+import re
 import time
 from moviepy.editor import ImageClip, VideoFileClip, concatenate_videoclips, AudioFileClip
 from pydub import AudioSegment
 import ffmpeg
-from pathlib import Path
 from moviepy.video.fx.all import fadein, fadeout
-from PIL import Image
-
+from pathlib import Path
 
 def is_valid_video(path):
     try:
@@ -19,31 +18,35 @@ def is_valid_video(path):
         return False
 
 
-def resize_and_crop_center(clip, target_width, target_height):
-    """Ensure the clip is resized to the target width and height while preserving aspect ratio."""
-    # Resize while maintaining aspect ratio
-    clip = clip.resize(width=target_width) if clip.w > target_width else clip
-    clip = clip.resize(height=target_height) if clip.h > target_height else clip
+def resize_and_crop_center_fixed(clip, target_width, target_height):
+    """Resize + crop để vừa khít khung hình đích, giữ nguyên tỉ lệ, crop giữa."""
 
-    # Log the new size
-    print(f"🔧 Đã resize: {clip.filename if hasattr(clip, 'filename') else 'Image'} → size sau: {clip.w}x{clip.h}")
+    # Tính aspect ratio đích và gốc
+    target_ratio = target_width / target_height
+    clip_ratio = clip.w / clip.h
 
-    # If after resizing, clip dimensions are still smaller, apply padding instead of cropping
-    if clip.w < target_width or clip.h < target_height:
-        print(f"⚠️ Không thể crop đúng kích thước {target_width}x{target_height}. Sử dụng padding.")
-        clip = clip.resize(width=target_width, height=target_height)
+    # Resize sao cho *một chiều >= khung*, chiều kia có thể dư để crop
+    if clip_ratio > target_ratio:
+        # Quá ngang → resize theo height
+        new_height = target_height
+        new_width = int(new_height * clip_ratio)
+    else:
+        # Quá dọc → resize theo width
+        new_width = target_width
+        new_height = int(new_width / clip_ratio)
 
-    # Crop the center of the clip to get the desired dimensions
-    x_center = clip.w // 2
-    y_center = clip.h // 2
-    cropped = clip.crop(
-        x_center - target_width // 2,
-        y_center - target_height // 2,
-        x_center + target_width // 2,
-        y_center + target_height // 2
-    )
-    print(f"✂️ Crop giữa: giữ lại vùng {target_width}x{target_height}")
-    return cropped
+    clip = clip.resize(newsize=(new_width, new_height))
+
+    # Crop ở giữa
+    x1 = (new_width - target_width) // 2
+    y1 = (new_height - target_height) // 2
+    x2 = x1 + target_width
+    y2 = y1 + target_height
+
+    clip = clip.crop(x1=x1, y1=y1, x2=x2, y2=y2)
+
+    print(f"✅ Resize+Crop: input {clip.w}x{clip.h} → output {target_width}x{target_height}")
+    return clip
 
 
 def apply_random_effect(clip, width, height):
@@ -77,72 +80,84 @@ def apply_random_effect(clip, width, height):
 
 
 def create_video_randomized_media(media_files, total_duration, change_every, word_count, output_file, is_vertical=True, transition_effect="fade"):
-    clips = []
+    width, height = (1080, 1920) if is_vertical else (1920, 1080)
     num_segments = max(1, word_count // change_every)
     duration_per_segment = total_duration / num_segments
-    retries = 5
+    hash_id = hashlib.md5(output_file.encode()).hexdigest()[:8]
+    temp_dir = Path(f"temp_ffmpeg_{hash_id}").resolve()
+    temp_dir.mkdir(exist_ok=True)
 
-    width, height = (1080, 1920) if is_vertical else (1920, 1080)
+    segment_paths = []
 
-    print(f"📐 Tạo video với chiều {'Dọc (9:16)' if is_vertical else 'Ngang (16:9)'} → kích thước: {width}x{height}")
-    print(f"📋 Tổng segment: {num_segments} | Mỗi đoạn dài: {duration_per_segment:.2f}s")
+    print(f"📐 Video size: {width}x{height}, segments: {num_segments}, mỗi đoạn: {duration_per_segment:.2f}s")
 
-    for seg in range(num_segments):
-        valid_clip = None
-        attempt = 0
+    for i in range(num_segments):
+        src = random.choice(media_files)
+        ext = Path(src).suffix.lower()
+        out_path = temp_dir / f"seg_{i:03}.mp4"
 
-        while attempt < retries and not valid_clip:
-            file = random.choice(media_files)
-            ext = os.path.splitext(file)[1].lower()
+        try:
+            if ext in [".jpg", ".png"]:
+                (
+                    ffmpeg
+                    .input(src, loop=1, t=duration_per_segment)
+                    .filter('scale', width, height)
+                    .output(str(out_path), vcodec='libx264', pix_fmt='yuv420p', r=30, loglevel='error')
+                    .overwrite_output()
+                    .run()
+                )
+            elif ext in [".mp4", ".mov"] and is_valid_video(src):
+                (
+                    ffmpeg
+                    .input(src)
+                    .filter('scale', width, height)
+                    .output(str(out_path), t=duration_per_segment, vcodec='libx264', pix_fmt='yuv420p', r=30, loglevel='error')
+                    .overwrite_output()
+                    .run()
+                )
+            else:
+                print(f"⚠️ Bỏ qua file không hợp lệ: {src}")
+                continue
 
-            try:
-                if ext in [".jpg", ".png"]:
-                    print(f"🖼️ Đang xử lý ảnh: {file}")
-                    img = ImageClip(file, duration=duration_per_segment)
-                    valid_clip = resize_and_crop_center(img, width, height)
+            # Dùng đường dẫn tuyệt đối, posix-style để tránh lỗi
+            segment_paths.append(f"file '{out_path.as_posix()}'")
 
-                elif ext in [".mp4", ".mov"] and is_valid_video(file):
-                    print(f"🎞️ Đang xử lý video: {file}")
-                    video = VideoFileClip(file)
-                    subclip = video.subclip(0, min(duration_per_segment, video.duration))
-                    subclip.filename = file
-                    subclip = subclip.set_duration(duration_per_segment)  # đảm bảo đúng duration
-                    valid_clip = resize_and_crop_center(subclip, width, height)
+        except Exception as e:
+            print(f"❌ Lỗi xử lý {src}: {e}")
 
-            except Exception as e:
-                print(f"⚠️ Lỗi khi dùng {file}: {e}")
-                attempt += 1
+    if not segment_paths:
+        raise Exception("❌ Không có segment nào được tạo!")
 
-        if valid_clip:
-            valid_clip = valid_clip.set_duration(duration_per_segment)
-            valid_clip, effect = apply_random_effect(valid_clip, width, height)
-            clips.append(valid_clip)
-            print(f"✅ Segment {seg+1}/{num_segments} đã sẵn sàng. Hiệu ứng: {effect}\n")
-        else:
-            print(f"❌ Segment {seg+1} thất bại sau {retries} lần thử.\n")
+    # Tạo concat list
+    concat_list_path = temp_dir / "concat_list.txt"
+    with open(concat_list_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(segment_paths))
 
-    if clips:
-        print("🔄 Ghép tất cả clip thành video cuối...")
-        final = concatenate_videoclips(clips, method="compose")
+    print("🔄 Đang ghép các đoạn lại...")
 
-        # Nếu video ngắn hơn tổng thời lượng → thêm đoạn lặp lại cuối cùng
-        current_duration = final.duration
-        if current_duration < total_duration:
-            pad_duration = total_duration - current_duration
-            print(f"⚠️ Video ngắn hơn âm thanh ({current_duration:.2f}s < {total_duration:.2f}s). Thêm padding...")
-            last_clip = clips[-1].fx(fadein, 0.3).fx(fadeout, 0.3).set_duration(pad_duration)
-            final = concatenate_videoclips([final, last_clip], method="compose")
-
-        # Đảm bảo thời lượng chính xác
-        final = final.set_duration(total_duration)
-        final.write_videofile(output_file, fps=30, logger=None)
-        print(f"✅ Xuất video hoàn tất: {output_file}")
-    else:
-        raise Exception("❌ Không có clip hợp lệ nào để tạo video.")
+    try:
+        (
+            ffmpeg
+            .input(str(concat_list_path), format='concat', safe=0)
+            .output(output_file, vcodec='libx264', acodec='aac', pix_fmt='yuv420p', r=30, loglevel='error')
+            .overwrite_output()
+            .run()
+        )
+        print(f"✅ Đã tạo xong video nền: {output_file}")
+    except ffmpeg.Error as e:
+        print(f"❌ Lỗi concat ffmpeg: {e.stderr.decode() if e.stderr else str(e)}")
+        raise e
+    finally:
+        # Cleanup an toàn
+        for f in temp_dir.glob("*"):
+            try: f.unlink()
+            except: pass
+        try: temp_dir.rmdir()
+        except: pass
 
 
 def burn_sub_and_audio(video_path, srt_path, voice_path, output_path,
-                       font_name="Arial", font_size="14", font_color="#FFFFFF",
+                       font_name=None, font_size="14", font_color="#FFFFFF",
                        bg_music_path=None, bg_music_volume=30):
     print("🎬 Bắt đầu render với phụ đề và âm thanh...")
 
@@ -181,20 +196,30 @@ def burn_sub_and_audio(video_path, srt_path, voice_path, output_path,
     ff_color = f"&H{font_color[5:7]}{font_color[3:5]}{font_color[1:3]}&"
     fonts_dir = "fonts"
 
-    # Subtitle filter
+    # Kiểm tra font
+    font_path = os.path.join(fonts_dir, font_name + ".ttf")
+    if not os.path.exists(font_path):
+        print(f"❌ Font '{font_name}' không tìm thấy trong thư mục fonts. Sử dụng font mặc định.")
+        
+
+    # Filter subtitle
     srt_safe = srt_path.replace("\\", "/")
-    subtitle_filter = ""
+    subtitle_filter = (
+        f"subtitles='{srt_safe}':fontsdir='{fonts_dir}':"
+        f"force_style='FontName={font_name},FontSize={font_size},PrimaryColour={ff_color},Alignment=2,MarginV=9'"
+    )
+    
+    # Subtitle filter
+    vf_filters = []
     ass_path = srt_path.replace(".srt", ".ass").replace("\\", "/")
 
     if os.path.exists(ass_path):
         ass_safe = ass_path.replace(":", "\\\\:").replace("'", "\\'")
-        subtitle_filter = f"ass={ass_safe}"
+        vf_filters.append(f"ass={ass_safe}:fontsdir=fonts")
     else:
-        subtitle_filter = (
-            f"subtitles='{srt_safe}':fontsdir='{fonts_dir}':"
-            f"force_style='FontName={font_name},FontSize={font_size},PrimaryColour={ff_color},Alignment=2,MarginV=9'"
-        )
+        vf_filters.append(subtitle_filter)
 
+    print("----------------------", vf_filters)
     # Thử lại tối đa 3 lần nếu lỗi
     max_retries = 3
     for attempt in range(1, max_retries + 1):
@@ -203,23 +228,19 @@ def burn_sub_and_audio(video_path, srt_path, voice_path, output_path,
             input_video = ffmpeg.input(video_path, t=voice_duration)
             input_audio = ffmpeg.input(audio_path)
 
-            (
-                ffmpeg
-                .output(
+            ffmpeg.output(
                     input_video,
                     input_audio,
                     output_path,
-                    vf=subtitle_filter,
+                    vf=",".join(vf_filters),
                     vcodec="libx264",
                     acodec="aac",
                     preset="slow",
                     pix_fmt="yuv420p",
                     t=voice_duration,
                     video_bitrate="5000k"
-                )
-                .overwrite_output()
-                .run()
-            )
+            ).overwrite_output().run()
+       
 
             print(f"✅ Xuất video hoàn tất: {output_path}")
             break  # ✅ Thành công, thoát khỏi vòng lặp
@@ -245,5 +266,3 @@ def percent_to_db(percent):
     """Chuyển % volume về decibel tương đối (dB giảm)."""
     percent = max(1, min(percent, 100))  # tránh chia 0
     return 40 * (1 - percent / 100)  # càng nhỏ càng giảm mạnh
-
-

@@ -25,7 +25,7 @@ def fetch_languages():
     return []
 
 
-def safe_remove_file(file_path, log_func=None, retries=5, delay=0.5):
+def safe_remove_file(file_path, log_func=None, retries=3, delay=0.5):
         for attempt in range(retries):
             try:
                 if os.path.exists(file_path):
@@ -96,12 +96,24 @@ class VideoGeneratorApp(QWidget):
 
         self.folder_path = ""
         self.text_list = []
-        self.fonts = [
-            "Arial", "Tahoma", "Times New Roman", "Verdana", "Helvetica",
-            "Georgia", "Courier New", "Comic Sans MS", "Impact", "Trebuchet MS",
-            "Lucida Console", "Palatino Linotype", "Garamond", "Segoe UI",
-            "Candara", "Playbill", "Consolas", "Century Gothic", "Calibri"
-        ]
+
+        # Thư mục chứa các font
+        fonts_folder = "fonts"
+        self.fonts = []
+
+        if os.path.exists(fonts_folder):
+            # Lấy tất cả các font .ttf trong thư mục "fonts"
+            font_files = [f for f in os.listdir(fonts_folder) if f.endswith(".ttf")]
+            self.fonts = [os.path.splitext(font)[0] for font in font_files]  # Lấy tên font mà không có đuôi .ttf
+
+        # Nếu không có font nào, thêm một số font mặc định vào
+        if not self.fonts:
+            self.fonts = [
+                "Arial", "Tahoma", "Times New Roman", "Verdana", "Helvetica",
+                "Georgia", "Courier New", "Comic Sans MS", "Impact", "Trebuchet MS",
+                "Lucida Console", "Palatino Linotype", "Garamond", "Segoe UI",
+                "Candara", "Playbill", "Consolas", "Century Gothic", "Calibri"
+            ]
 
         main_layout = QHBoxLayout()
         main_layout.setContentsMargins(10, 10, 10, 10)
@@ -162,7 +174,7 @@ class VideoGeneratorApp(QWidget):
 
         settings_layout.addWidget(QLabel("Font chữ phụ đề:"))
         self.font_selector = QComboBox()
-        self.font_selector.addItems(self.fonts)
+        self.font_selector.addItems(self.fonts)  # Sử dụng font từ thư mục
         settings_layout.addWidget(self.font_selector)
         settings_group.setLayout(settings_layout)
 
@@ -176,8 +188,6 @@ class VideoGeneratorApp(QWidget):
         subtitle_group = QGroupBox("📜 Subtitle Options")
         subtitle_layout = QVBoxLayout()
 
-
-
         # Row 1: Subtitle Toggle + Mode
         subtitle_row1 = QHBoxLayout()
         subtitle_row1.addWidget(QLabel("💬 Phụ đề:"))
@@ -190,17 +200,14 @@ class VideoGeneratorApp(QWidget):
         self.subtitle_mode = QComboBox()
         self.subtitle_mode.addItems([
             "Phụ đề thường (toàn câu)",
-            "Highlight tuần tự (màu chữ)",
-            "Highlight tuần tự (ô vuông)",
-            "Highlight tuần tự (zoom chữ)",
+            # "Highlight tuần tự (màu chữ)",
+            # "Highlight tuần tự (ô vuông)",
+            # "Highlight tuần tự (zoom chữ)",
             "Hiệu ứng từng chữ một (chuyên sâu)",
         ])
         subtitle_row1.addWidget(self.subtitle_mode)
 
         subtitle_layout.addLayout(subtitle_row1)
-
-
-
 
         # Row 2: Font size + Base color + Highlight color
         subtitle_row2 = QHBoxLayout()
@@ -236,8 +243,6 @@ class VideoGeneratorApp(QWidget):
         subtitle_row2.addWidget(self.subtitle_highlight_color_selector)
 
         subtitle_layout.addLayout(subtitle_row2)
-
-
 
         # Row 3: Subtitle position + Language
         subtitle_row3 = QHBoxLayout()
@@ -286,7 +291,6 @@ class VideoGeneratorApp(QWidget):
         # Set the layout for the group box and add it to the main layout
         cpu_model_group.setLayout(cpu_model_layout)
         left_column_layout.addWidget(cpu_model_group)
-
 
         # --- Background Music ---
         music_group = QGroupBox("🎵 Background Music")
@@ -682,9 +686,9 @@ class VideoGeneratorApp(QWidget):
             return
 
         # Xóa file tạm sau khi xong
-        for f in [ass_file, karaoke_json]:
-            safe_remove_file(f, log_func=log)
-        for f in [audio_file, sub_file, temp_video]:
-            safe_remove_file(f, log_func=log)
+        # for f in [ass_file, karaoke_json]:
+        #     safe_remove_file(f, log_func=log)
+        # for f in [audio_file, sub_file, temp_video]:
+        #     safe_remove_file(f, log_func=log)
 
           

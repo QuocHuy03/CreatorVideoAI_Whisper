@@ -1,9 +1,9 @@
 {
   "ratio": "Dọc (9:16)",
-  "font": "Comic Sans MS",
+  "font": "DL-Calvera-2",
   "font_size": "10",
   "base_color": "FFFFFF",
-  "highlight_color": "00FFFF",
+  "highlight_color": "FFFF00",
   "music": "Không có nhạc nền",
   "volume": "30%"
 }
