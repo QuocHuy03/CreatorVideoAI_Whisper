@@ -383,6 +383,8 @@ def generate_karaoke_ass_from_srt_and_words(
     highlight_color="&H00FFFF00",
     mode="Phụ đề thường (toàn câu)"
 ):
+    font = font.replace("-", " ").replace("_", " ")
+
     def convert_srt_time(srt_time):
         h, m, s = srt_time.split(":")
         s, ms = s.split(",")
@@ -420,6 +422,7 @@ def generate_karaoke_ass_from_srt_and_words(
         "giữa": 5,
         "dưới": 2
     }
+    
     alignment = alignment_map.get(position.lower(), 2)
 
     output_ass_path = sanitize_path(output_ass_path)
@@ -521,7 +524,6 @@ def generate_karaoke_ass_from_srt_and_words(
                     scale_up = int(size * 1.2)
                     effect = f"{{\\fad(100,100)\\fs{size}\\t(0,200,\\fs{scale_up})}}{w['text']}"
                     f.write(f"Dialogue: 0,{w_start},{w_end},Highlight,,0,0,0,,{effect}\n")
-
 
     word_idx = temp_idx
 

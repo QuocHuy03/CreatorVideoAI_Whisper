@@ -6,7 +6,7 @@ import concurrent.futures
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QPushButton, QFileDialog, QLabel,
     QTextEdit, QProgressBar, QMessageBox, QTableWidget, QTableWidgetItem,
-    QHBoxLayout, QComboBox, QHeaderView, QGroupBox, QSizePolicy, QLineEdit, QPlainTextEdit
+    QHBoxLayout, QComboBox, QHeaderView, QGroupBox, QPlainTextEdit
 )
 from PyQt5.QtCore import Qt, QMetaObject, Q_ARG, pyqtSlot
 from PyQt5.QtGui import QFont
@@ -134,6 +134,10 @@ class VideoGeneratorApp(QWidget):
         self.load_preset_btn.clicked.connect(self.load_preset)
         preset_buttons_layout.addWidget(self.load_preset_btn)
 
+        self.reload_btn = QPushButton("🔄 Reload")
+        self.reload_btn.clicked.connect(self.full_reload_ui)
+        preset_buttons_layout.addWidget(self.reload_btn)
+
         left_column_layout.addLayout(preset_buttons_layout)
 
         # --- TOP ROW: Voice + Folder + Font Settings ---
@@ -176,7 +180,16 @@ class VideoGeneratorApp(QWidget):
         self.font_selector = QComboBox()
         self.font_selector.addItems(self.fonts)  # Sử dụng font từ thư mục
         settings_layout.addWidget(self.font_selector)
+
+        # ✅ Thêm checkbox "Crop video"
+        self.crop_checkbox = QPushButton("🖼️ Crop: OFF")
+        self.crop_checkbox.setCheckable(True)
+        self.crop_checkbox.setChecked(False)
+        self.crop_checkbox.clicked.connect(self.toggle_crop_checkbox)
+        settings_layout.addWidget(self.crop_checkbox)
+
         settings_group.setLayout(settings_layout)
+
 
         # Add 3 group boxes vào hàng đầu
         top_h_layout.addWidget(api_group, 3)
@@ -200,9 +213,6 @@ class VideoGeneratorApp(QWidget):
         self.subtitle_mode = QComboBox()
         self.subtitle_mode.addItems([
             "Phụ đề thường (toàn câu)",
-            # "Highlight tuần tự (màu chữ)",
-            # "Highlight tuần tự (ô vuông)",
-            # "Highlight tuần tự (zoom chữ)",
             "Hiệu ứng từng chữ một (chuyên sâu)",
         ])
         subtitle_row1.addWidget(self.subtitle_mode)
@@ -363,6 +373,31 @@ class VideoGeneratorApp(QWidget):
 
         main_layout.addLayout(right_column_layout, 3)
         self.setLayout(main_layout)
+
+
+    def full_reload_ui(self):
+        confirm = QMessageBox.question(
+            self,
+            "Reload?",
+            "Bạn có chắc chắn muốn khởi động lại toàn bộ dữ liệu?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if confirm != QMessageBox.Yes:
+            return
+
+        self.safe_append_log("🔁 Đang reload toàn bộ dữ liệu...")
+
+        self.new_instance = VideoGeneratorApp()
+        self.new_instance.show()
+
+        self.close()
+
+
+    def toggle_crop_checkbox(self):
+        if self.crop_checkbox.isChecked():
+            self.crop_checkbox.setText("🖼️ Crop: ON")
+        else:
+            self.crop_checkbox.setText("🖼️ Crop: OFF")
 
 
 
@@ -639,14 +674,20 @@ class VideoGeneratorApp(QWidget):
             is_vertical = aspect_ratio == "Dọc (9:16)"
             log(f"📐 Tỉ lệ video: {aspect_ratio}")
 
+
+            crop_enabled = self.crop_checkbox.isChecked()
+            log(f"✂️ Crop mode: {'ON' if crop_enabled else 'OFF'}")
+
             create_video_randomized_media(
                 media_files=media_files,
                 total_duration=duration,
                 change_every=5,
                 word_count=len(text.split()),
                 output_file=temp_video,
-                is_vertical=is_vertical
+                is_vertical=is_vertical,
+                crop=crop_enabled
             )
+
             log("🎞️ Tạo video nền hoàn tất")
 
           
@@ -686,9 +727,9 @@ class VideoGeneratorApp(QWidget):
             return
 
         # Xóa file tạm sau khi xong
-        # for f in [ass_file, karaoke_json]:
-        #     safe_remove_file(f, log_func=log)
-        # for f in [audio_file, sub_file, temp_video]:
-        #     safe_remove_file(f, log_func=log)
+        for f in [ass_file, karaoke_json]:
+            safe_remove_file(f, log_func=log)
+        for f in [audio_file, sub_file, temp_video]:
+            safe_remove_file(f, log_func=log)
 
           

@@ -1,13 +1,14 @@
 import os
 import random
 import hashlib
-import re
 import time
 from moviepy.editor import ImageClip, VideoFileClip, concatenate_videoclips, AudioFileClip
 from pydub import AudioSegment
 import ffmpeg
 from moviepy.video.fx.all import fadein, fadeout
 from pathlib import Path
+
+
 
 def is_valid_video(path):
     try:
@@ -16,37 +17,6 @@ def is_valid_video(path):
         return True
     except Exception:
         return False
-
-
-def resize_and_crop_center_fixed(clip, target_width, target_height):
-    """Resize + crop để vừa khít khung hình đích, giữ nguyên tỉ lệ, crop giữa."""
-
-    # Tính aspect ratio đích và gốc
-    target_ratio = target_width / target_height
-    clip_ratio = clip.w / clip.h
-
-    # Resize sao cho *một chiều >= khung*, chiều kia có thể dư để crop
-    if clip_ratio > target_ratio:
-        # Quá ngang → resize theo height
-        new_height = target_height
-        new_width = int(new_height * clip_ratio)
-    else:
-        # Quá dọc → resize theo width
-        new_width = target_width
-        new_height = int(new_width / clip_ratio)
-
-    clip = clip.resize(newsize=(new_width, new_height))
-
-    # Crop ở giữa
-    x1 = (new_width - target_width) // 2
-    y1 = (new_height - target_height) // 2
-    x2 = x1 + target_width
-    y2 = y1 + target_height
-
-    clip = clip.crop(x1=x1, y1=y1, x2=x2, y2=y2)
-
-    print(f"✅ Resize+Crop: input {clip.w}x{clip.h} → output {target_width}x{target_height}")
-    return clip
 
 
 def apply_random_effect(clip, width, height):
@@ -79,7 +49,8 @@ def apply_random_effect(clip, width, height):
     return clip, effect  # "none"
 
 
-def create_video_randomized_media(media_files, total_duration, change_every, word_count, output_file, is_vertical=True, transition_effect="fade"):
+def create_video_randomized_media(media_files, total_duration, change_every, word_count, output_file, is_vertical=True, transition_effect="fade", crop=True):
+
     width, height = (1080, 1920) if is_vertical else (1920, 1080)
     num_segments = max(1, word_count // change_every)
     duration_per_segment = total_duration / num_segments
@@ -98,23 +69,48 @@ def create_video_randomized_media(media_files, total_duration, change_every, wor
 
         try:
             if ext in [".jpg", ".png"]:
+                input_ff = ffmpeg.input(src, loop=1, t=duration_per_segment)
+
+                if crop:
+                    # Crop: scale trực tiếp
+                    input_ff = input_ff.filter('scale', width, height)
+                else:
+                    # Fit + pad để không méo ảnh
+                    input_ff = (
+                        input_ff
+                        .filter('scale',
+                                f"if(gt(a,{width}/{height}),{width},-1)",
+                                f"if(gt(a,{width}/{height}),-1,{height})")
+                        .filter('pad', width, height, '(ow-iw)/2', '(oh-ih)/2')
+                    )
+
                 (
-                    ffmpeg
-                    .input(src, loop=1, t=duration_per_segment)
-                    .filter('scale', width, height)
+                    input_ff
                     .output(str(out_path), vcodec='libx264', pix_fmt='yuv420p', r=30, loglevel='error')
                     .overwrite_output()
                     .run()
                 )
             elif ext in [".mp4", ".mov"] and is_valid_video(src):
+                input_ff = ffmpeg.input(src)
+
+                if crop:
+                    input_ff = input_ff.filter('scale', width, height)
+                else:
+                    input_ff = (
+                        input_ff
+                        .filter('scale',
+                                f"if(gt(a,{width}/{height}),{width},-1)",
+                                f"if(gt(a,{width}/{height}),-1,{height})")
+                        .filter('pad', width, height, '(ow-iw)/2', '(oh-ih)/2')
+                    )
+
                 (
-                    ffmpeg
-                    .input(src)
-                    .filter('scale', width, height)
+                    input_ff
                     .output(str(out_path), t=duration_per_segment, vcodec='libx264', pix_fmt='yuv420p', r=30, loglevel='error')
                     .overwrite_output()
                     .run()
                 )
+
             else:
                 print(f"⚠️ Bỏ qua file không hợp lệ: {src}")
                 continue
@@ -198,12 +194,14 @@ def burn_sub_and_audio(video_path, srt_path, voice_path, output_path,
 
     # Kiểm tra font
     font_path = os.path.join(fonts_dir, font_name + ".ttf")
+    
     if not os.path.exists(font_path):
         print(f"❌ Font '{font_name}' không tìm thấy trong thư mục fonts. Sử dụng font mặc định.")
         
 
     # Filter subtitle
     srt_safe = srt_path.replace("\\", "/")
+    font_name = font_name.replace("-", " ").replace("_", " ")
     subtitle_filter = (
         f"subtitles='{srt_safe}':fontsdir='{fonts_dir}':"
         f"force_style='FontName={font_name},FontSize={font_size},PrimaryColour={ff_color},Alignment=2,MarginV=9'"
@@ -219,7 +217,6 @@ def burn_sub_and_audio(video_path, srt_path, voice_path, output_path,
     else:
         vf_filters.append(subtitle_filter)
 
-    print("----------------------", vf_filters)
     # Thử lại tối đa 3 lần nếu lỗi
     max_retries = 3
     for attempt in range(1, max_retries + 1):
