@@ -515,12 +515,13 @@ def generate_karaoke_ass_from_srt_and_words(
                     f.write(f"Dialogue: 0,{start},{end},Highlight,,0,0,0,,{ass_line.strip()}\n")
 
             elif mode == "Hiệu ứng từng chữ một (chuyên sâu)":
-                for w in line_words:
+                for w in word_items:
                     w_start = format_ass_time(w["start"])
                     w_end = format_ass_time(w["end"])
                     scale_up = int(size * 1.2)
                     effect = f"{{\\fad(100,100)\\fs{size}\\t(0,200,\\fs{scale_up})}}{w['text']}"
                     f.write(f"Dialogue: 0,{w_start},{w_end},Highlight,,0,0,0,,{effect}\n")
+
 
     word_idx = temp_idx
 
