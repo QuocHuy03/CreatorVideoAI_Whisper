@@ -2,12 +2,18 @@ import os
 import random
 import hashlib
 import time
-from moviepy.editor import ImageClip, VideoFileClip, concatenate_videoclips, AudioFileClip
+from moviepy.editor import VideoFileClip, AudioFileClip
 from pydub import AudioSegment
 import ffmpeg
-from moviepy.video.fx.all import fadein, fadeout
+import subprocess
 from pathlib import Path
 
+def has_audio_stream(video_path):
+    result = subprocess.run([
+        "ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index",
+        "-of", "default=noprint_wrappers=1:nokey=1", video_path
+    ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    return bool(result.stdout.strip())
 
 
 def is_valid_video(path):
@@ -19,47 +25,35 @@ def is_valid_video(path):
         return False
 
 
-def apply_random_effect(clip, width, height):
-    """Apply random effects such as fade, zoom, and slide."""
-    effects = ["fade", "zoom", "slide_left", "slide_right", "slide_up", "slide_down", "none"]
-    effect = random.choice(effects)
-
-    duration = min(0.7, clip.duration / 2)
-
-    if effect == "fade":
-        return fadein(fadeout(clip, duration), duration), effect
-
-    elif effect == "zoom":
-        return clip.resize(lambda t: 1 + 0.03 * t), effect
-
-    elif effect.startswith("slide"):
-        start_pos = {
-            "slide_left": lambda: (-width, 0),
-            "slide_right": lambda: (width, 0),
-            "slide_up": lambda: (0, -height),
-            "slide_down": lambda: (0, height)
-        }.get(effect, lambda: (0, 0))()
-
-        animated_clip = clip.set_position(lambda t: (
-            int(start_pos[0] * (1 - t / duration)) if abs(start_pos[0]) > 0 else "center",
-            int(start_pos[1] * (1 - t / duration)) if abs(start_pos[1]) > 0 else "center"
-        ))
-        return animated_clip, effect
-
-    return clip, effect  # "none"
+def adjust_segment_timing(total_duration: float, target_segment_duration: float = 4.5, max_transition_duration: float = 1.2):
+    rough_segments = max(1, int(total_duration // target_segment_duration))
+    optimal_dur = None
+    optimal_t = None
+    for s in range(rough_segments, rough_segments + 3):
+        t = min(max_transition_duration, total_duration / (3 * s))
+        d = (total_duration + (s - 1) * t) / s
+        if 3.8 <= d <= 5.2:
+            optimal_dur = d
+            optimal_t = t
+            break
+    return s, optimal_dur, optimal_t
 
 
-def create_video_randomized_media(media_files, total_duration, change_every, word_count, output_file, is_vertical=True, transition_effect="fade", crop=True):
-
+def create_video_randomized_media(media_files, total_duration, change_every, word_count, output_file,
+                                         is_vertical=True, crop=True, transition_effects=None):
     width, height = (1080, 1920) if is_vertical else (1920, 1080)
-    num_segments = max(1, word_count // change_every)
-    duration_per_segment = total_duration / num_segments
+
+    num_segments, duration_per_segment, dur = adjust_segment_timing(total_duration, target_segment_duration=4.5, max_transition_duration=1.2)
+
+
+    print(f"📊 Mỗi segment: {duration_per_segment:.2f}s | Hiệu ứng chuyển: {dur:.2f}s | Tổng khớp: {duration_per_segment * num_segments - dur * (num_segments - 1):.2f}s")
+
+
     hash_id = hashlib.md5(output_file.encode()).hexdigest()[:8]
     temp_dir = Path(f"temp_ffmpeg_{hash_id}").resolve()
     temp_dir.mkdir(exist_ok=True)
 
     segment_paths = []
-
     print(f"📐 Video size: {width}x{height}, segments: {num_segments}, mỗi đoạn: {duration_per_segment:.2f}s")
 
     for i in range(num_segments):
@@ -68,88 +62,146 @@ def create_video_randomized_media(media_files, total_duration, change_every, wor
         out_path = temp_dir / f"seg_{i:03}.mp4"
 
         try:
-            if ext in [".jpg", ".png"]:
-                input_ff = ffmpeg.input(src, loop=1, t=duration_per_segment)
+            input_ff = ffmpeg.input(src, loop=1, t=duration_per_segment) if ext in [".jpg", ".png"] else ffmpeg.input(src)
 
-                if crop:
-                    # Crop: scale trực tiếp
-                    input_ff = input_ff.filter('scale', width, height)
-                else:
-                    # Fit + pad để không méo ảnh
-                    input_ff = (
-                        input_ff
-                        .filter('scale',
-                                f"if(gt(a,{width}/{height}),{width},-1)",
-                                f"if(gt(a,{width}/{height}),-1,{height})")
-                        .filter('pad', width, height, '(ow-iw)/2', '(oh-ih)/2')
-                    )
-
-                (
-                    input_ff
-                    .output(str(out_path), vcodec='libx264', pix_fmt='yuv420p', r=30, loglevel='error')
-                    .overwrite_output()
-                    .run()
-                )
-            elif ext in [".mp4", ".mov"] and is_valid_video(src):
-                input_ff = ffmpeg.input(src)
-
-                if crop:
-                    input_ff = input_ff.filter('scale', width, height)
-                else:
-                    input_ff = (
-                        input_ff
-                        .filter('scale',
-                                f"if(gt(a,{width}/{height}),{width},-1)",
-                                f"if(gt(a,{width}/{height}),-1,{height})")
-                        .filter('pad', width, height, '(ow-iw)/2', '(oh-ih)/2')
-                    )
-
-                (
-                    input_ff
-                    .output(str(out_path), t=duration_per_segment, vcodec='libx264', pix_fmt='yuv420p', r=30, loglevel='error')
-                    .overwrite_output()
-                    .run()
-                )
-
+            if crop:
+                input_ff = input_ff.filter('scale', width, height)
             else:
-                print(f"⚠️ Bỏ qua file không hợp lệ: {src}")
-                continue
+                input_ff = (
+                    input_ff
+                    .filter('scale',
+                            f"if(gt(a,{width}/{height}),{width},-1)",
+                            f"if(gt(a,{width}/{height}),-1,{height})")
+                    .filter('pad', width, height, '(ow-iw)/2', '(oh-ih)/2')
+                )
 
-            # Dùng đường dẫn tuyệt đối, posix-style để tránh lỗi
-            segment_paths.append(f"file '{out_path.as_posix()}'")
-
+            (
+                input_ff
+                .output(str(out_path), t=duration_per_segment, vcodec='libx264', pix_fmt='yuv420p', r=30, loglevel='error')
+                .overwrite_output()
+                .run()
+            )
+            segment_paths.append(str(out_path))
         except Exception as e:
             print(f"❌ Lỗi xử lý {src}: {e}")
+            continue
 
     if not segment_paths:
         raise Exception("❌ Không có segment nào được tạo!")
 
-    # Tạo concat list
-    concat_list_path = temp_dir / "concat_list.txt"
-    with open(concat_list_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(segment_paths))
+    # 🔄 Ghép bằng ffmpeg filter_complex + xfade
+    print("🔄 Ghép segment kèm hiệu ứng chuyển cảnh...")
 
-    print("🔄 Đang ghép các đoạn lại...")
+    filter_complex = ""
+    inputs = ""
+    maps = []
+    last_v = ""
+    last_a = ""
+    offset = 0.0
+    dur = min(0.7, duration_per_segment / 2)
 
+    has_audio = []
+
+    cmd = ["ffmpeg"]
+
+    # Chuẩn bị input và kiểm tra audio
+    for i, path in enumerate(segment_paths):
+        cmd += ["-i", path]
+        filter_complex += f"[{i}:v]format=yuv420p,scale={width}:{height},fps=30[v{i}];"
+        
+        if has_audio_stream(path):
+            filter_complex += f"[{i}:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[a{i}];"
+            has_audio.append(True)
+        else:
+            has_audio.append(False)
+
+    last_v = "v0"
+    last_a = "a0" if has_audio[0] else None
+    if transition_effects is None:
+            transition_effects = [
+                "fade",         # Làm mờ dần
+                "fadeblack",    # Mờ thành đen
+                "fadewhite",    # Mờ thành trắng
+                "slideleft",    # Trượt sang trái
+                "slideright",   # Trượt sang phải
+                "slideup",      # Trượt lên trên
+                "slidedown",    # Trượt xuống dưới
+                "crossfade",    # Giao thoa mờ
+                "circleopen",   # Mở tròn
+                "circleclose",  # Đóng tròn
+                "wipeleft",     # Vuốt sang trái
+                "wiperight",    # Vuốt sang phải
+                "wipeup",       # Vuốt lên
+                "wipedown"      # Vuốt xuống
+            ]
+
+    print(f"📽 Số hiệu ứng chuyển cảnh: {len(transition_effects)} | Hiệu ứng mẫu: {transition_effects}")
+
+    for i in range(1, len(segment_paths)):
+        effect = random.choice(transition_effects)
+        filter_complex += f"[{last_v}][v{i}]xfade=transition={effect}:duration={dur}:offset={offset:.2f}[v{i}_out];"
+        last_v = f"v{i}_out"
+
+        if has_audio[i] and last_a:
+            filter_complex += f"[{last_a}][a{i}]acrossfade=d={dur}[a{i}_out];"
+            last_a = f"a{i}_out"
+        else:
+            last_a = None
+
+        offset += duration_per_segment - dur
+
+    # Tạo và chạy lệnh ffmpeg
+    
+    cmd += sum([["-i", path] for path in segment_paths], [])
+
+    cmd += [
+    "-filter_complex", filter_complex,
+    "-map", f"[{last_v}]"
+    ]
+
+    if last_a:
+        cmd += ["-map", f"[{last_a}]"]
+
+    cmd += [
+        "-c:v", "libx264",
+        "-c:a", "aac",
+        "-pix_fmt", "yuv420p",
+        "-r", "30",
+        "-shortest",
+        "-y",
+        output_file
+    ]
+
+
+    
     try:
-        (
-            ffmpeg
-            .input(str(concat_list_path), format='concat', safe=0)
-            .output(output_file, vcodec='libx264', acodec='aac', pix_fmt='yuv420p', r=30, loglevel='error')
-            .overwrite_output()
-            .run()
-        )
-        print(f"✅ Đã tạo xong video nền: {output_file}")
-    except ffmpeg.Error as e:
-        print(f"❌ Lỗi concat ffmpeg: {e.stderr.decode() if e.stderr else str(e)}")
-        raise e
-    finally:
-        # Cleanup an toàn
-        for f in temp_dir.glob("*"):
-            try: f.unlink()
-            except: pass
-        try: temp_dir.rmdir()
+        result = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+        # In log chi tiết FFmpeg (dễ debug)
+        print("📥 FFmpeg output:")
+        print(result.stdout)
+
+        for i in range(10):
+            if os.path.exists(output_file) and os.path.getsize(output_file) > 1024:
+                break
+            print(f"⏳ Đợi FFmpeg hoàn tất ghi file... ({i+1}s)")
+            time.sleep(1)
+
+        if result.returncode != 0:
+            print(f"❌ Lỗi khi ghép video. Exit code: {result.returncode}")
+            raise Exception("FFmpeg failed. Xem log ở trên để biết chi tiết.")
+
+        print(f"✅ Đã tạo video hoàn tất: {output_file}")
+
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Lỗi khi ghép video: {e}")
+
+    # Dọn temp
+    for f in temp_dir.glob("*"):
+        try: f.unlink()
         except: pass
+    try: temp_dir.rmdir()
+    except: pass
 
 
 def burn_sub_and_audio(video_path, srt_path, voice_path, output_path,

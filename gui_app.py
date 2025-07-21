@@ -15,6 +15,15 @@ from voice_google import transcribe_audio, generate_karaoke_ass_from_srt_and_wor
 from video_creator import create_video_randomized_media, burn_sub_and_audio
 
 
+def wait_for_file(filepath, timeout=10):
+        start = time.time()
+        while not os.path.exists(filepath) or os.path.getsize(filepath) == 0:
+            if time.time() - start > timeout:
+                raise TimeoutError(f"⏰ File chưa sẵn sàng sau {timeout}s: {filepath}")
+            time.sleep(0.2)
+
+
+
 def fetch_languages():
     try:
         response = requests.get("http://62.171.131.164:5000/api/get_gemini_languages", timeout=5)
@@ -592,7 +601,8 @@ class VideoGeneratorApp(QWidget):
 
         audio_file = f"temp_audio_{index}.mp3"
         sub_file = f"temp_sub_{index}.srt"
-        temp_video = f"temp_video_{index}.mp4"
+        temp_video = os.path.abspath(f"temp_video_{index}.mp4")
+
 
         voice_id = self.voice_selector.currentText()
         if not voice_id:
@@ -705,6 +715,10 @@ class VideoGeneratorApp(QWidget):
                 music_volume = 30
             log(f"🔊 Âm lượng nhạc nền: {music_volume}%")
 
+            log(f"⏳ Chờ file video sẵn sàng: {temp_video}")
+            wait_for_file(temp_video)
+
+
             # Render final video with subtitles and background audio
             burn_sub_and_audio(
                 video_path=temp_video,
@@ -723,7 +737,7 @@ class VideoGeneratorApp(QWidget):
 
         except Exception as e:
             log(f"❌ Lỗi: {e}")
-            self.safe_update_status(index, "❌ Lỗi")
+            self.safe_update_status(index, f"❌ Lỗi , {e}")
             return
 
         # Xóa file tạm sau khi xong
