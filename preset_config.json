@@ -1,8 +1,8 @@
 {
   "ratio": "Dọc (9:16)",
   "font": "Bungee_Spice",
-  "font_size": "10",
-  "base_color": "FFFFFF",
+  "font_size": "20",
+  "base_color": "00FFFF",
   "highlight_color": "FFFF00",
   "music": "Không có nhạc nền",
   "volume": "30%"

@@ -125,15 +125,9 @@ def create_video_randomized_media(media_files, total_duration, change_every, wor
                 "slideleft",    # Trượt sang trái
                 "slideright",   # Trượt sang phải
                 "slideup",      # Trượt lên trên
-                "slidedown",    # Trượt xuống dưới
-                "crossfade",    # Giao thoa mờ
-                "circleopen",   # Mở tròn
-                "circleclose",  # Đóng tròn
-                "wipeleft",     # Vuốt sang trái
-                "wiperight",    # Vuốt sang phải
-                "wipeup",       # Vuốt lên
-                "wipedown"      # Vuốt xuống
+                "slidedown"     # Trượt xuống dưới
             ]
+
 
     print(f"📽 Số hiệu ứng chuyển cảnh: {len(transition_effects)} | Hiệu ứng mẫu: {transition_effects}")
 
