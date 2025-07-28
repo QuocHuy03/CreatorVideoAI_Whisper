@@ -53,7 +53,7 @@ def safe_remove_file(file_path, log_func=None, retries=3, delay=0.5):
         return False
 
 
-MAX_THREADS = 3
+MAX_THREADS = 5
 
 
 class VideoGeneratorApp(QWidget):
